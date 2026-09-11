@@ -46,6 +46,8 @@ class QAPair(BaseModel):
     output: str = Field(description="セキュリティエンジニア視点の具体的・体系的で実践的な解決策・手順")
 
 
+import time
+
 def generate_questions_for_category(client: genai.Client, model: str, cat_key: str, count: int) -> List[dict]:
     cat = CATEGORIES[cat_key]
     prompt = f"""あなたはエンタープライズサイバーセキュリティの最高責任者・エキスパートです。
@@ -60,25 +62,47 @@ def generate_questions_for_category(client: genai.Client, model: str, cat_key: s
 3. 出力形式は必ず指定されたスキーマに従うこと。
 """
 
-    response = client.models.generate_content(
-        model=model,
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=list[QAPair],
-            temperature=0.7,
-        ),
-    )
+    models_to_try = [model]
+    # 3.8が混雑(503)している場合のフォールバック候補
+    for fallback in ["gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash"]:
+        if fallback not in models_to_try:
+            models_to_try.append(fallback)
 
-    data = json.loads(response.text)
-    return data
+    for m in models_to_try:
+        for attempt in range(3):
+            try:
+                response = client.models.generate_content(
+                    model=m,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        response_schema=list[QAPair],
+                        temperature=0.7,
+                    ),
+                )
+                data = json.loads(response.text)
+                return data
+            except Exception as e:
+                err_str = str(e)
+                if "503" in err_str or "429" in err_str:
+                    wait_time = (attempt + 1) * 3
+                    print(f"    [{m}] 混雑検知 (Attempt {attempt+1}/3): {wait_time}秒待機してリトライ...")
+                    time.sleep(wait_time)
+                else:
+                    print(f"    [{m}] エラー: {e}")
+                    break
+        print(f"    [{m}] 失敗したため次のモデル候補に切り替えます。")
+
+    raise RuntimeError(f"All models failed for category {cat_key}")
 
 
 def main():
     parser = argparse.ArgumentParser(description="Generate enterprise security dataset via Gemini")
-    parser.add_argument("--model", default=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"), help="Teacher model name")
-    parser.add_argument("--count_per_cat", type=int, default=10, help="Number of samples per category")
+    parser.add_argument("--model", default=os.getenv("GEMINI_MODEL", "gemini-3.8-flash"), help="Teacher model name")
+    parser.add_argument("--count_per_cat", type=int, default=5, help="Number of samples per category")
     parser.add_argument("--output", default="data/train.jsonl", help="Output JSONL path")
+    parser.add_argument("--categories", nargs="*", default=list(CATEGORIES.keys()), help="Target categories to generate")
+    parser.add_argument("--append", action="store_true", help="Append to output file instead of overwrite")
     args = parser.parse_args()
 
     api_key = os.getenv("GEMINI_API_KEY")
@@ -93,7 +117,9 @@ def main():
     all_samples = []
     print(f"Starting dataset generation using model: {args.model}")
 
-    for cat_key in CATEGORIES:
+    for cat_key in args.categories:
+        if cat_key not in CATEGORIES:
+            continue
         print(f"Generating {args.count_per_cat} samples for category: {cat_key}...")
         try:
             samples = generate_questions_for_category(client, args.model, cat_key, args.count_per_cat)
@@ -104,11 +130,12 @@ def main():
         except Exception as e:
             print(f"  Failed for {cat_key}: {e}")
 
-    with open(output_path, "w", encoding="utf-8") as f:
+    mode = "a" if args.append else "w"
+    with open(output_path, mode, encoding="utf-8") as f:
         for item in all_samples:
             f.write(json.dumps(item, ensure_ascii=False) + "\n")
 
-    print(f"\nDone! Total {len(all_samples)} samples saved to {output_path}")
+    print(f"\nDone! Added {len(all_samples)} samples to {output_path}")
 
 
 if __name__ == "__main__":
