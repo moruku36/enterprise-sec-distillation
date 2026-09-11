@@ -5,6 +5,10 @@
 エンタープライズ環境におけるサイバーセキュリティ防御に特化した知識蒸留（Distillation / Fine-Tuning）検証プロジェクト。
 Teacher モデルとして **Gemini 3.8 Flash** を使用して高品質なセキュリティ防御データセット（問答ペア）を生成し、**QLoRA (4-bit)** を用いてローカルの小型 OSS LLM（生徒モデル: Qwen 3B）にファインチューニングを実施、最終的に **Ollama (GGUF)** でローカル推論・効果検証を行います。
 
+> [!NOTE]
+> **Inspiration / Acknowledgment**:  
+> 本検証は、[@furuhashilab](https://github.com/furuhashilab) 氏による [KnowledgeDistillation2026](https://github.com/furuhashilab/KnowledgeDistillation2026) の検証に着想を得て、エンタープライズセキュリティ防御領域への応用として実施されました。
+
 ---
 
 ## 1. 検証アーキテクチャ & データフロー
@@ -147,4 +151,13 @@ Teacher モデルとして **Gemini 3.8 Flash** を使用して高品質なセ�
 ### ③ 今後の展開・実務活用へのロードマップ
 - **社内専用ナレッジの学習**: 自社のセキュリティ規程、過去のインシデント報告書、ネットワーク構成図をTeacherに読み込ませて蒸留すれば、**「自社の環境を完全に把握している社内専属のセキュリティアドバイザーAI」** を低コストに内製できます。
 - **データ量のスケール**: 今回はパイロット検証として25問で実施しましたが、これを100〜300問に増やすことで、より複雑な攻撃シナリオやマルチクラウド環境（Azure/GCP）にも柔軟に対応できるようになります。
+
+---
+
+## 7. 謝辞・参考プロジェクト (Acknowledgments & References)
+
+本プロジェクトは、以下の検証および公開知見に着想を得て実施されました。有益な知見を公開してくださったことに感謝いたします。
+
+- **着想元リポジトリ**: [furuhashilab/KnowledgeDistillation2026](https://github.com/furuhashilab/KnowledgeDistillation2026) by [@furuhashilab](https://github.com/furuhashilab)
+
 
