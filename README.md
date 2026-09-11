@@ -154,10 +154,11 @@ Teacher モデルとして **Gemini 3.8 Flash** を使用して高品質なセ�
 
 ---
 
-## 7. 謝辞・参考プロジェクト (Acknowledgments & References)
+## 7. 謝辞・参考プロジェクト・レポート (Acknowledgments & References)
 
-本プロジェクトは、以下の検証および公開知見に着想を得て実施されました。有益な知見を公開してくださったことに感謝いたします。
+本プロジェクトは、以下の検証および公開知見・レポートに着想・知見を得て実施されました。有益な知見を公開してくださったことに感謝いたします。
 
 - **着想元リポジトリ**: [furuhashilab/KnowledgeDistillation2026](https://github.com/furuhashilab/KnowledgeDistillation2026) by [@furuhashilab](https://github.com/furuhashilab)
+- **脅威インテリジェンス参照**: [Anthropic Threat Intelligence Report: September 2026](https://www.anthropic.com/threat-intelligence-report-september-2026) (最新の脅威動向および防御コントロール設計の参考)
 
 
