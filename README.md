@@ -1,7 +1,9 @@
 # Enterprise Security LLM Distillation (Gemini 3.8 Flash -> Local OSS LLM)
 
+![Distillation Concept](docs/distillation-concept.jpg)
+
 エンタープライズ環境におけるサイバーセキュリティ防御に特化した知識蒸留（Distillation / Fine-Tuning）検証プロジェクト。
-Teacher モデルとして **Gemini 3.8 Flash** を使用して高品質なセキュリティ防御データセット（問答ペア）を生成し、**QLoRA (4-bit)** を用いてローカルの小型 OSS LLM（生徒モデル）にファインチューニングを実施、最終的に **Ollama (GGUF)** でローカル推論・効果検証を行います。
+Teacher モデルとして **Gemini 3.8 Flash** を使用して高品質なセキュリティ防御データセット（問答ペア）を生成し、**QLoRA (4-bit)** を用いてローカルの小型 OSS LLM（生徒モデル: Qwen 3B）にファインチューニングを実施、最終的に **Ollama (GGUF)** でローカル推論・効果検証を行います。
 
 ---
 
