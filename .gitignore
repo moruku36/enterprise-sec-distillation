@@ -33,6 +33,7 @@ data/raw/
 models/
 lora_output/
 wandb/
+tools/
 
 # Environment variables & keys
 .env

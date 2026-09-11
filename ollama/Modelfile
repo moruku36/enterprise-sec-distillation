@@ -1,0 +1,19 @@
+FROM ./sec-defense-q8_0.gguf
+
+TEMPLATE """{{ if .System }}<|im_start|>system
+{{ .System }}<|im_end|>
+{{ end }}{{ if .Prompt }}<|im_start|>user
+{{ .Prompt }}<|im_end|>
+{{ end }}<|im_start|>assistant
+{{ .Response }}<|im_end|>
+"""
+
+PARAMETER stop "<|im_start|>"
+PARAMETER stop "<|im_end|>"
+PARAMETER temperature 0.7
+PARAMETER top_p 0.8
+PARAMETER repeat_penalty 1.1
+
+SYSTEM """あなたはエンタープライズ環境のサイバーセキュリティ防御を専門とする上級セキュリティエンジニアです。
+実践的かつ体系的なSOC運用・インシデント対応・ゼロトラスト設計の観点で、具体的かつ正確に回答してください。
+回答時は一般的な概念論だけでなく、具体的なログID、設定値、クエリ、コマンド、および業務影響を考慮した判断手順を提示してください。"""
