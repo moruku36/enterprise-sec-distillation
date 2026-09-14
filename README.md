@@ -157,6 +157,8 @@ Teacher モデルとして **Gemini 3.8 Flash** を使用して高品質なセ�
 ### ① 社内固有ナレッジの追加蒸留（プライベートSOCアドバイザー化）
 - **社内ドキュメントの統合**: 自社のセキュリティ基本方針、社内ネットワーク構成図、クラウドインフラ設計書、過去のインシデント報告書（SOP）をTeacherモデルにインプット。
 - **企業特化の回答**: 一般論ではなく「自社が契約しているEDR製品」「社内IPアドレス帯」「自社のエスカレーション先」を熟知した、完全社内特化のセキュリティアドバイザーを低コストに内製できます。
+- > [!IMPORTANT]
+  > **公開・取り扱い上の注意**: 実組織のSOP、実際のネットワーク構成図、過去の社内インシデントデータ等を蒸留する場合は、必ず機密保持のため**非公開（プライベート）リポジトリ・社内隔離環境**にて運用・管理してください（本公開リポジトリに含まれるデータは全て検証・教育用の合成データです）。
 
 ### ② 脅威インテリジェンスの継続的自動蒸留 (Continuous Distillation)
 - **定期的な知識更新**: 日々公開される新規CVE、ゼロデイ攻撃手法、MITRE ATT&CKの新規テクニックをトリガーにして、月次・四半期ごとに差分データセットを自動生成。
@@ -177,5 +179,11 @@ Teacher モデルとして **Gemini 3.8 Flash** を使用して高品質なセ�
 
 - **着想元リポジトリ**: [furuhashilab/KnowledgeDistillation2026](https://github.com/furuhashilab/KnowledgeDistillation2026) by [@furuhashilab](https://github.com/furuhashilab)
 - **脅威インテリジェンス参照**: [Anthropic Threat Intelligence Report: September 2026](https://www.anthropic.com/threat-intelligence-report-september-2026) (最新の脅威動向および防御コントロール設計の参考)
+
+---
+
+## 9. ライセンス (License)
+
+本プロジェクトのコードおよび検証用スクリプトは [MIT License](LICENSE) の下で公開されています。データセットは検証・学習目的で生成された合成データです。
 
 
