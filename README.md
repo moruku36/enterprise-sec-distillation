@@ -172,15 +172,25 @@ ollama create sec-defense -f ollama/Modelfile
 
 ## 7. 評価手法 (Evaluation Methodology)
 
-モデルの評価は、学習データセットに含まれない独立した 10 問の未学習シナリオ（`data/eval.jsonl`）を用いて、**「ルールベース自動スクリーニング ＋ 人手ファクトチェック」** のハイブリッド方式で実施します。
+モデルの評価は、学習データセットに含まれない独立した 10 問の未学習シナリオ（`data/eval.jsonl`）を用いて、**「ルールベース厳格チェック ＋ Known-Bad パターン検知」** による自動評価を実施します。
 
-各シナリオには公式ドキュメント（AWS/Azure 公式リファレンス、Microsoft Learn、IETF RFC、MITRE ATT&CK 等）に基づく根拠情報（`references`）と検証基準（`ground_truth_criteria`）を紐づけています。
+各シナリオには公式仕様（AWS API リファレンス、Microsoft Learn、IETF RFC、MITRE ATT&CK 等）に基づく根拠情報（`references`）と、以下の検証ロジックを紐づけています。
 
-### 評価項目
-1. **概念網羅性 (`coverage_score`)**: シナリオごとに定義された必須対応概念（例: EDR隔離、セッション無効化、IMDSv2強制等）の合致率（0.0〜1.0）。
-2. **実務コマンド含有 (`command_presence`)**: 概念論にとどまらず、現場で即座に入力可能な実コマンド（PowerShell, AWS/Azure CLI, KQL, Linux CLI等）が含まれているか（Boolean）。
-3. **既知ハルシネーション検出 (`known_hallucination_count`)**: 非実在のAWS API（例: `revoke-instance-profile-credentials-permission`）や誤った復旧コマンド（BitLockerに対する `diskpart /s` 等）が含まれていないかの静的パターン検知。
-4. **人手ファクトチェック判定 (`validation_status`)**: 自動判定結果と公式ドキュメント（`references`）に照らし合わせ、出力の正確性と実用性を総合判定（`PASS_CONCRETE` / `PASS_GENERIC` / `HALLUCINATION_DETECTED` / `INSUFFICIENT`）。
+### 評価項目・メトリクス
+1. **概念・要件網羅性 (`coverage_score`)**:
+   - 各シナリオで必須となる対応（例: EDR隔離、正規CLI実行、IMDSv2必須化等）について、単語の単一ヒットではなく `all_of`（必須全含有）および `any_of`（いずれか含有）条件で厳格判定（0.0〜1.0）。
+2. **実務コマンド含有 (`command_presence`)**:
+   - 概念論にとどまらず、現場で実行可能なコマンド構文（CLI, PowerShell, KQL等）を含んでいるか（Boolean）。
+3. **Known-Bad パターン検知 (`known_bad_pattern_count`)**:
+   - 非実在のAWS CLIオプション（例: `delete-bucket` による無関係な破壊、`rm-mountpoint`, `--no-mfa-enabled`）や誤った復旧コマンド（BitLockerに対する `diskpart /s` 等）を検出。
+4. **自動判定スコア (`auto_accuracy_score` / `auto_operational_score`)**:
+   - 正確性（1〜5点）：Known-Badパターンが検出された場合は上限2点に減点、厳格チェックの充足率に応じてスコアリング。
+   - 運用性（1〜5点）：安全なコマンド提示と実務適合性に基づく自動評価。
+5. **判定ステータス (`auto_validation_status`)**:
+   - `PASS_STRICT`（厳格要件を満たし実コマンドを含む）
+   - `PASS_PARTIAL`（部分的な要件充足）
+   - `KNOWN_BAD_DETECTED`（非実在・危険パターンの検知）
+   - `INSUFFICIENT`（要件未達）
 
 ### 評価スクリプト実行
 比較基準（Baseline）は、学習元である同一サイズのベースモデル **`qwen2.5:3b`** に固定しています。
@@ -196,48 +206,45 @@ python src/evaluate.py --dry_run
 
 ## 8. ベンチマーク結果 (Benchmark Results)
 
-全10問の比較評価結果（詳細は `data/eval_results.json` 参照）から得られた代表的な比較例です。
+全10問の実機比較評価結果（詳細は [`data/eval_results.json`](data/eval_results.json) 参照）から得られた代表的な実測例です。
 
-### Case 1: Active Directory × BitLocker ランサムウェア初動対応
+### Case 1: Active Directory × BitLocker ランサムウェア初動対応 (`eval_01`)
 - **質問**: 社内LANでBitLockerの不正暗号化を装うランサムウェアを検知。最初の30分で実施すべきトリアージ手順と緊急遮断判断基準を提示せよ。
 - **ベースモデル (`qwen2.5:3b`)**:
-  - 「端末の隔離」「トラフィック監視」「管理者権限の確認」など、概念論としては安全だが、具体的なコマンドラインや即応手順の提示がない。
+  - `coverage_score: 0.25`, `command_presence: False`, `auto_validation_status: INSUFFICIENT`
+  - 「エンドポイント間の通信状況確認」「ドメインコントローラーへの不正アクセス確認」など教科書的な概念論に終始。正規コマンド `manage-bde` の提示はなし。
 - **蒸留モデル (`sec-defense:3B`)**:
-  - GPO強制適用（`gpupdate /force`）、ゼロトラスト隔離、ネットワーク切断基準など実務的なフローを展開。
-  - **課題**: BitLockerキーの検証として `diskpart /s ...` という非実在の破棄検証手順やエラーコード `0x8037` を出力（後述のLimitations参照）。
+  - `coverage_score: 0.00`, `command_presence: False`, `auto_validation_status: INSUFFICIENT`
+  - Event ID（4625, 4760）などの専門用語は出現するものの、正規のBitLocker検証コマンドは提示できず、「如月」といった架空ツールや曖昧な遮断基準に言及。
 
-### Case 2: AWS GuardDuty インスタンス認証情報漏洩
+### Case 2: AWS GuardDuty インスタンス認証情報漏洩 (`eval_02`)
 - **質問**: GuardDuty「InstanceCredentialExfiltration.OutsideAWS」検知時の被害局限化、セッション無効化、IMDSv2強制適用手順。
 - **ベースモデル (`qwen2.5:3b`)**:
-  - 「インスタンスの停止」「IAMロールの無効化」「メタデータオプションの変更」といった大枠の指示のみ。
+  - `coverage_score: 0.00`, `command_presence: True`, `auto_validation_status: INSUFFICIENT`
+  - `modify-instance-metadata-options` を提示するも、`--http-mode none` という非実在オプションを捏造。
 - **蒸留モデル (`sec-defense:3B`)**:
-  - 漏洩セッションをピンポイントで無効化する `aws iam put-role-policy`（`aws:TokenIssueTime` 条件付きDeny）および、EC2メタデータオプション更新コマンド `aws ec2 modify-instance-metadata-options --http-tokens required` を具体的に出力。
+  - `coverage_score: 0.00`, `command_presence: True`, `known_bad_pattern_count: 3`, `auto_validation_status: KNOWN_BAD_DETECTED`
+  - コマンドラインの出力意欲は極めて高いが、`aws efs rm-mountpoint`, `aws s3api delete-bucket`, `--no-mfa-enabled` といった無関係かつ非実在の危険コマンドを多数生成。IMDSv2でも必須となる `--http-tokens required` が欠落。
 
 ---
 
-## 9. 既知の制約とハルシネーション分析 (Known Limitations)
+## 9. 考察と既知の制約 (Findings & Limitations)
 
-本検証により、**「小型LLM（3Bクラス）に対するドメイン特化チューニング」** における明確なトレードオフが確認されました。
+本検証により、**「少量の合成データによる小型LLM（3Bクラス）の指示チューニング」** における極めて重要な技術的教訓が浮き彫りとなりました。
 
-```text
-[ベースモデル (Qwen2.5-3B)]
-  ・曖昧で教科書的・一般的な概念論にとどまる
-  ・具体的なコマンドを避けるため、致命的な嘘（ハルシネーション）は少ない
+### 1. 「具体性の向上」と「堂々とした誤謬」のトレードオフ
+- **現象**: わずか 25 件の SFT によって、モデルは「セキュリティエンジニアらしい口調」や「コマンドブロックを積極的に出力する姿勢」を迅速に獲得しました。
+- **リスク**: 一方で、専門用語の獲得に対して事実性の裏付け（正確なAPI仕様やオプション構文の記憶）が追いつかず、**「ベースモデル以上に堂々と間違ったコマンド（非実在CLI・危険な削除操作）を出力する」** 傾向が顕著に現れました。
 
-[蒸留モデル (sec-defense:3B)]
-  ・実務的コマンドやクエリを自信を持って即座に提示する（実用性の向上）
-  ・一方で、存在しないCLIオプションや誤った構文を「堂々と出力する」ハルシネーションリスクが増加
-```
+### 2. 評価器（Evaluator）の重要性
+- 単純な「キーワード検索（単語のOR一致）」で評価した場合、誤った回答であっても高いカバレッジスコアが付与されてしまう脆弱性が確認されました。
+- セキュリティやインフラのような正確性が最優先されるドメインでは、**`all_of` による必須オプションの完全一致検証** や、**Known-Bad パターン（非実在構文・破壊的コマンド）の静的検出** を評価器に組み込むことが不可欠です。
 
-### 具体的なハルシネーション検出例
-1. **非実在のAWS CLIコマンド / IAM操作**:
-   - 初期プロトタイプにおいて、`aws iam revoke-instance-profile-credentials-permission` という存在しないAPIを生成するケースが確認されました。正規の対応は、IAMロールへのインラインDenyポリシー適用、または一時的認証情報の失効（`aws:TokenIssueTime` 条件）です。
-2. **BitLocker 管理コマンドの混同**:
-   - Windows における BitLocker 操作の正規 CLI は `manage-bde`（例: `manage-bde -status`, `manage-bde -protectors`）ですが、モデルが `diskpart /s ...` をBitLockerキー破棄検証として提示する誤用が確認されました。
-
-### 結論と運用上の推奨事項
-小型モデル（3B）単体で生成されたコマンドを無検証で本番環境に投入することは推奨されません。
-実務運用においては、**「小型モデルによる一次トリアージ方針・クエリドラフトの高速生成」** を行った上で、**「静的コマンドホワイトリストによる構文検証」** または **「フロンティアモデル（Gemini等）による二重レビュー（Dual-LLM Guardrail）」** を組み合わせるアーキテクチャが必須となります。
+### 3. 本PoCの結論と運用アーキテクチャへの示唆
+「少量のSynthetic SFTで小型オープンモデルを即戦力の専門家化できる」という初期仮説は、**正確性の観点では成り立たない** ことが実証されました。小型モデルを実務に組み込む場合は、以下の防衛的アーキテクチャが前提となります：
+1. **コマンド生成のホワイトリスト静的構文解析**: 生成された CLI/KQL を実行前にパーサー（AST / OpenAPI仕様）で構文検証する。
+2. **フロンティアモデル（Gemini等）による二重検証 (Dual-LLM Guardrail)**: 一次案作成はローカル小型LLM、最終的な構文・リスク検証はTeacher側で行う。
+3. **正確性を重視した選別的アライメント**: DPO (Direct Preference Optimization) 等による非実在構文に対するペナルティ学習。
 
 ---
 

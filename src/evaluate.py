@@ -75,69 +75,98 @@ def query_ollama(model: str, prompt: str, timeout: int = 120) -> str:
         return f"Error querying Ollama ({model}): {e}"
 
 
-import re
+GLOBAL_KNOWN_BAD_PATTERNS = [
+    "revoke-instance-profile-credentials-permission",
+    "diskpart /s bitlocker",
+    "0x8037",
+    "aws_securityhub_findings",
+    "revoking-instance-profile",
+    "state = \"disabled\"",
+    "http-mode none",
+    "rm-mountpoint",
+    "delete-bucket",
+    "--no-mfa-enabled",
+]
 
-def extract_search_terms(concept: str) -> List[str]:
-    """概念文字列から検証用キーワードを抽出（英単語、コマンド名、重要用語）"""
-    tokens = re.findall(r'[A-Za-z0-9_-]+|[一-龥]{2,}|[ァ-ンー]{2,}', concept)
-    return [t for t in tokens if len(t) >= 2]
 
-
-def check_hallucinations_and_accuracy(response_text: str, criteria: Dict[str, Any]) -> Dict[str, Any]:
+def evaluate_response_quality(response_text: str, criteria: Dict[str, Any]) -> Dict[str, Any]:
     """
-    回答テキストに対して、ルールベースの概念カバレッジ、コマンド存在性、
-    および既知ハルシネーションの検出を行う。
+    回答テキストに対して、厳格な required_checks (all_of / any_of) の充足度、
+    コマンド構文の存在、および known-bad / forbidden パターンの検出を行いスコアリングする。
     """
-    required = criteria.get("required_concepts", [])
-    hit_concepts = []
-    for c in required:
-        terms = extract_search_terms(c)
-        if terms and any(term.lower() in response_text.lower() for term in terms):
-            hit_concepts.append(c)
+    resp_lower = response_text.lower()
 
-    known_hallucinations = [
-        "revoke-instance-profile-credentials-permission",
-        "diskpart /s bitlocker",
-        "0x8037",
-        "aws_securityhub_findings",
-        "revoking-instance-profile",
-        "state = \"disabled\"",
-        "http-mode none",
-    ]
-    detected_hallucinations = [h for h in known_hallucinations if h.lower() in response_text.lower()]
+    # 1. 概念・要件チェック (required_checks)
+    required_checks = criteria.get("required_checks", [])
+    passed_checks = []
+    failed_checks = []
 
+    if required_checks:
+        for check in required_checks:
+            name = check.get("name", "unnamed_check")
+            all_of = check.get("all_of", [])
+            any_of = check.get("any_of", [])
+
+            # all_of: すべての単語が含まれている必要がある
+            all_ok = all(kw.lower() in resp_lower for kw in all_of) if all_of else True
+            # any_of: いずれか1つが含まれていればOK
+            any_ok = any(kw.lower() in resp_lower for kw in any_of) if any_of else True
+
+            if all_ok and any_ok:
+                passed_checks.append(name)
+            else:
+                failed_checks.append(name)
+        total_checks = len(required_checks)
+        coverage_score = round(len(passed_checks) / total_checks, 2) if total_checks else 1.0
+    else:
+        # 古いスキーマ (required_concepts) のフォールバック
+        legacy_req = criteria.get("required_concepts", [])
+        hit = [c for c in legacy_req if any(kw.lower() in resp_lower for kw in c.split("/"))]
+        coverage_score = round(len(hit) / len(legacy_req), 2) if legacy_req else 1.0
+        passed_checks = hit
+        failed_checks = [c for c in legacy_req if c not in hit]
+        total_checks = len(legacy_req)
+
+    # 2. 禁止パターン・Known-bad パターン検出
+    scenario_forbidden = criteria.get("forbidden_patterns", [])
+    all_bad_candidates = list(set(GLOBAL_KNOWN_BAD_PATTERNS + scenario_forbidden))
+    detected_bad = [bad for bad in all_bad_candidates if bad.lower() in resp_lower]
+
+    # 3. 実コマンド構文の存在
     has_code_or_commands = any(marker in response_text for marker in [
         "```", "aws ", "az ", "Get-", "gpupdate", "manage-bde", "netstat", "ss ", "tcpdump", "sudo ", "Connect-MgGraph", "modify-instance-metadata-options"
     ])
 
-    coverage_score = round(len(hit_concepts) / len(required), 2) if required else 1.0
-
-    # 簡易自動採点（1〜5点スケール）
-    if detected_hallucinations:
-        auto_accuracy_score = 2
-        status = "HALLUCINATION_DETECTED"
-    elif coverage_score >= 0.7:
-        auto_accuracy_score = 4 if has_code_or_commands else 3
-        status = "PASS_CONCRETE" if has_code_or_commands else "PASS_GENERIC"
-    elif coverage_score >= 0.4:
-        auto_accuracy_score = 3
-        status = "PASS_GENERIC"
+    # 4. 自動判定スコアリング (1〜5点)
+    if detected_bad:
+        auto_accuracy = 2  # 誤コマンド・非実在APIが含まれる場合は上限2点
+        auto_status = "KNOWN_BAD_DETECTED"
+    elif coverage_score >= 0.75:
+        auto_accuracy = 5 if has_code_or_commands else 4
+        auto_status = "PASS_STRICT" if has_code_or_commands else "PASS_GENERIC"
+    elif coverage_score >= 0.5:
+        auto_accuracy = 3
+        auto_status = "PASS_PARTIAL"
     else:
-        auto_accuracy_score = 2
-        status = "INSUFFICIENT"
+        auto_accuracy = 2
+        auto_status = "INSUFFICIENT"
 
-    auto_operational_score = 4 if (has_code_or_commands and coverage_score >= 0.5) else (3 if coverage_score >= 0.4 else 2)
+    auto_operational = 4 if (has_code_or_commands and not detected_bad and coverage_score >= 0.5) else (
+        2 if detected_bad else (3 if coverage_score >= 0.5 else 2)
+    )
 
     return {
         "coverage_score": coverage_score,
         "command_presence": has_code_or_commands,
-        "known_hallucination_count": len(detected_hallucinations),
-        "detected_hallucinations": detected_hallucinations,
-        "matched_concepts": hit_concepts,
-        "total_required_concepts": len(required),
-        "manual_accuracy_score": auto_accuracy_score,
-        "manual_operational_score": auto_operational_score,
-        "validation_status": status,
+        "known_bad_pattern_count": len(detected_bad),
+        "detected_bad_patterns": detected_bad,
+        "passed_checks": passed_checks,
+        "failed_checks": failed_checks,
+        "total_checks": total_checks,
+        "auto_accuracy_score": auto_accuracy,
+        "auto_operational_score": auto_operational,
+        "auto_validation_status": auto_status,
+        "manual_review": None,
         "fact_check_notes": criteria.get("fact_check_notes", ""),
     }
 
@@ -184,8 +213,8 @@ def main():
             print(f"  - Querying baseline ({args.base_model})...")
             base_res = query_ollama(args.base_model, prompt)
 
-        distilled_eval = check_hallucinations_and_accuracy(distilled_res, criteria)
-        base_eval = check_hallucinations_and_accuracy(base_res, criteria)
+        distilled_eval = evaluate_response_quality(distilled_res, criteria)
+        base_eval = evaluate_response_quality(base_res, criteria)
 
         results.append({
             "test_id": s_id,

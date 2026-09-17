@@ -88,6 +88,10 @@ class TestDatasetSchema(unittest.TestCase):
             self.assertIn("category", item)
             self.assertIn("distilled_response", item)
             self.assertIn("base_response", item)
+            self.assertIn("distilled_evaluation", item)
+            self.assertIn("coverage_score", item["distilled_evaluation"])
+            self.assertIn("auto_accuracy_score", item["distilled_evaluation"])
+            self.assertIn("auto_validation_status", item["distilled_evaluation"])
 
 
 if __name__ == "__main__":
