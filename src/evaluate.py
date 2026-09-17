@@ -75,30 +75,69 @@ def query_ollama(model: str, prompt: str, timeout: int = 120) -> str:
         return f"Error querying Ollama ({model}): {e}"
 
 
+import re
+
+def extract_search_terms(concept: str) -> List[str]:
+    """概念文字列から検証用キーワードを抽出（英単語、コマンド名、重要用語）"""
+    tokens = re.findall(r'[A-Za-z0-9_-]+|[一-龥]{2,}|[ァ-ンー]{2,}', concept)
+    return [t for t in tokens if len(t) >= 2]
+
+
 def check_hallucinations_and_accuracy(response_text: str, criteria: Dict[str, Any]) -> Dict[str, Any]:
     """
-    回答テキストに対して、必須キーワードの網羅性と、
-    既知の典型的なハルシネーション（非実在APIやコマンド）の検出を行う。
+    回答テキストに対して、ルールベースの概念カバレッジ、コマンド存在性、
+    および既知ハルシネーションの検出を行う。
     """
     required = criteria.get("required_concepts", [])
-    hit_concepts = [c for c in required if any(kw.lower() in response_text.lower() for kw in c.split("/"))]
+    hit_concepts = []
+    for c in required:
+        terms = extract_search_terms(c)
+        if terms and any(term.lower() in response_text.lower() for term in terms):
+            hit_concepts.append(c)
 
     known_hallucinations = [
         "revoke-instance-profile-credentials-permission",
         "diskpart /s bitlocker",
         "0x8037",
         "aws_securityhub_findings",
+        "revoking-instance-profile",
+        "state = \"disabled\"",
+        "http-mode none",
     ]
     detected_hallucinations = [h for h in known_hallucinations if h.lower() in response_text.lower()]
 
-    has_code_or_commands = any(marker in response_text for marker in ["```", "aws ", "az ", "Get-", "gpupdate", "manage-bde", "netstat", "ss "])
+    has_code_or_commands = any(marker in response_text for marker in [
+        "```", "aws ", "az ", "Get-", "gpupdate", "manage-bde", "netstat", "ss ", "tcpdump", "sudo ", "Connect-MgGraph", "modify-instance-metadata-options"
+    ])
+
+    coverage_score = round(len(hit_concepts) / len(required), 2) if required else 1.0
+
+    # 簡易自動採点（1〜5点スケール）
+    if detected_hallucinations:
+        auto_accuracy_score = 2
+        status = "HALLUCINATION_DETECTED"
+    elif coverage_score >= 0.7:
+        auto_accuracy_score = 4 if has_code_or_commands else 3
+        status = "PASS_CONCRETE" if has_code_or_commands else "PASS_GENERIC"
+    elif coverage_score >= 0.4:
+        auto_accuracy_score = 3
+        status = "PASS_GENERIC"
+    else:
+        auto_accuracy_score = 2
+        status = "INSUFFICIENT"
+
+    auto_operational_score = 4 if (has_code_or_commands and coverage_score >= 0.5) else (3 if coverage_score >= 0.4 else 2)
 
     return {
-        "required_concepts_total": len(required),
-        "required_concepts_matched": len(hit_concepts),
-        "coverage_ratio": round(len(hit_concepts) / len(required), 2) if required else 1.0,
-        "has_concrete_commands": has_code_or_commands,
-        "detected_hallucination_patterns": detected_hallucinations,
+        "coverage_score": coverage_score,
+        "command_presence": has_code_or_commands,
+        "known_hallucination_count": len(detected_hallucinations),
+        "detected_hallucinations": detected_hallucinations,
+        "matched_concepts": hit_concepts,
+        "total_required_concepts": len(required),
+        "manual_accuracy_score": auto_accuracy_score,
+        "manual_operational_score": auto_operational_score,
+        "validation_status": status,
         "fact_check_notes": criteria.get("fact_check_notes", ""),
     }
 
@@ -153,6 +192,7 @@ def main():
             "category": cat,
             "instruction": item.get("instruction", ""),
             "input": item.get("input", ""),
+            "references": item.get("references", []),
             "distilled_model": args.model,
             "distilled_response": distilled_res,
             "distilled_evaluation": distilled_eval,

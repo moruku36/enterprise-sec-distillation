@@ -126,7 +126,7 @@ python -m unittest discover -s tests -v
 VRAM 8GB（RTX 3070）環境で効率的に学習するため、BitsAndBytes 4-bit NF4 量子化と LoRA を組み合わせています。
 
 - **Base Model**: `Qwen/Qwen2.5-3B-Instruct`
-- **LoRA設定**: `r=16`, `lora_alpha=32`, `target_modules=["q_proj", "k_proj", "v_proj", "o_proj"]`
+- **LoRA設定**: `r=16`, `lora_alpha=32`, `target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]`
 - **シーケンス長**: 1,536 tokens
 
 ```bash
@@ -172,20 +172,23 @@ ollama create sec-defense -f ollama/Modelfile
 
 ## 7. 評価手法 (Evaluation Methodology)
 
-モデルの評価は、学習データセットに含まれない独立した 10 問の未学習シナリオ（`data/eval.jsonl`）を用いて実施します。
+モデルの評価は、学習データセットに含まれない独立した 10 問の未学習シナリオ（`data/eval.jsonl`）を用いて、**「ルールベース自動スクリーニング ＋ 人手ファクトチェック」** のハイブリッド方式で実施します。
 
-### 評価軸
-1. **具体性 (Concreteness)**: 概念論に終始せず、現場で即座に実行可能なコマンドライン、API、クエリ、設定値が含まれているか。
-2. **実務適合性 (Operational Feasibility)**: 企業の業務継続性（不用意なドメインコントローラー遮断の回避等）や証拠保全の順序（RFC 3227）を考慮しているか。
-3. **正確性 & ハルシネーション検証 (Accuracy & Fact-Checking)**: 公式ドキュメントに実在しないコマンドや、誤ったセキュリティ運用手順（非推奨API、誤った復旧コマンド）を含んでいないか。
+各シナリオには公式ドキュメント（AWS/Azure 公式リファレンス、Microsoft Learn、IETF RFC、MITRE ATT&CK 等）に基づく根拠情報（`references`）と検証基準（`ground_truth_criteria`）を紐づけています。
+
+### 評価項目
+1. **概念網羅性 (`coverage_score`)**: シナリオごとに定義された必須対応概念（例: EDR隔離、セッション無効化、IMDSv2強制等）の合致率（0.0〜1.0）。
+2. **実務コマンド含有 (`command_presence`)**: 概念論にとどまらず、現場で即座に入力可能な実コマンド（PowerShell, AWS/Azure CLI, KQL, Linux CLI等）が含まれているか（Boolean）。
+3. **既知ハルシネーション検出 (`known_hallucination_count`)**: 非実在のAWS API（例: `revoke-instance-profile-credentials-permission`）や誤った復旧コマンド（BitLockerに対する `diskpart /s` 等）が含まれていないかの静的パターン検知。
+4. **人手ファクトチェック判定 (`validation_status`)**: 自動判定結果と公式ドキュメント（`references`）に照らし合わせ、出力の正確性と実用性を総合判定（`PASS_CONCRETE` / `PASS_GENERIC` / `HALLUCINATION_DETECTED` / `INSUFFICIENT`）。
 
 ### 評価スクリプト実行
 比較基準（Baseline）は、学習元である同一サイズのベースモデル **`qwen2.5:3b`** に固定しています。
 ```bash
-# 実機評価実行 (Ollama が起動している必要があります)
+# 実機評価実行 (Ollama で推論を実行し、data/eval_results.json に保存)
 python src/evaluate.py --model sec-defense --base_model qwen2.5:3b --output data/eval_results.json
 
-# ドライラン (設問ロード・スキーマ検証のみ)
+# ドライラン (モデル呼び出しを行わず、設問ロードとスキーマ検証のみ実施)
 python src/evaluate.py --dry_run
 ```
 

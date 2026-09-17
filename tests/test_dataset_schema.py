@@ -8,7 +8,7 @@ import json
 import unittest
 from pathlib import Path
 from pydantic import BaseModel, Field
-from typing import Optional, Dict, Any
+from typing import Optional, List, Dict, Any
 
 
 class TrainSample(BaseModel):
@@ -16,10 +16,10 @@ class TrainSample(BaseModel):
     input: Optional[str] = ""
     output: str = Field(min_length=20)
     category: str
-    teacher_model: Optional[str] = None
-    generated_at: Optional[str] = None
-    prompt_version: Optional[str] = None
-    validation_status: Optional[str] = None
+    teacher_model: str
+    generated_at: str
+    prompt_version: str
+    validation_status: str
 
 
 class EvalSample(BaseModel):
@@ -27,7 +27,8 @@ class EvalSample(BaseModel):
     category: str
     instruction: str = Field(min_length=10)
     input: Optional[str] = ""
-    ground_truth_criteria: Optional[Dict[str, Any]] = None
+    ground_truth_criteria: Dict[str, Any]
+    references: List[Dict[str, str]]
 
 
 class TestDatasetSchema(unittest.TestCase):
