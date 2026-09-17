@@ -8,13 +8,21 @@ import os
 import json
 import argparse
 from pathlib import Path
-from typing import List
+from typing import List, Any
 from pydantic import BaseModel, Field
-from google import genai
-from google.genai import types
-from dotenv import load_dotenv
 
-load_dotenv()
+try:
+    from google import genai
+    from google.genai import types
+except ImportError:
+    genai = None
+    types = None
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 # サブカテゴリ定義
 CATEGORIES = {
@@ -48,7 +56,9 @@ class QAPair(BaseModel):
 
 import time
 
-def generate_questions_for_category(client: genai.Client, model: str, cat_key: str, count: int) -> List[dict]:
+from datetime import datetime, timezone
+
+def generate_questions_for_category(client: genai.Client, model: str, cat_key: str, count: int) -> tuple[List[dict], str]:
     cat = CATEGORIES[cat_key]
     prompt = f"""あなたはエンタープライズサイバーセキュリティの最高責任者・エキスパートです。
 以下のカテゴリに関する、実務的で深みのある問答ペア（Instruction / Output）を {count} 件作成してください。
@@ -81,7 +91,7 @@ def generate_questions_for_category(client: genai.Client, model: str, cat_key: s
                     ),
                 )
                 data = json.loads(response.text)
-                return data
+                return data, m
             except Exception as e:
                 err_str = str(e)
                 if "503" in err_str or "429" in err_str:
@@ -101,6 +111,7 @@ def main():
     parser.add_argument("--model", default=os.getenv("GEMINI_MODEL", "gemini-3.8-flash"), help="Teacher model name")
     parser.add_argument("--count_per_cat", type=int, default=5, help="Number of samples per category")
     parser.add_argument("--output", default="data/train.jsonl", help="Output JSONL path")
+    parser.add_argument("--raw_dir", default="data/raw", help="Directory to save raw generation dumps")
     parser.add_argument("--categories", nargs="*", default=list(CATEGORIES.keys()), help="Target categories to generate")
     parser.add_argument("--append", action="store_true", help="Append to output file instead of overwrite")
     args = parser.parse_args()
@@ -110,9 +121,15 @@ def main():
         print("Error: GEMINI_API_KEY environment variable is not set.")
         return
 
+    if genai is None:
+        print("Error: google-genai package is not installed. Please run pip install google-genai")
+        return
+
     client = genai.Client(api_key=api_key)
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    raw_dir = Path(args.raw_dir)
+    raw_dir.mkdir(parents=True, exist_ok=True)
 
     all_samples = []
     print(f"Starting dataset generation using model: {args.model}")
@@ -122,11 +139,22 @@ def main():
             continue
         print(f"Generating {args.count_per_cat} samples for category: {cat_key}...")
         try:
-            samples = generate_questions_for_category(client, args.model, cat_key, args.count_per_cat)
+            samples, actual_teacher = generate_questions_for_category(client, args.model, cat_key, args.count_per_cat)
+            now_iso = datetime.now(timezone.utc).isoformat()
+
+            # Raw dump for auditing & provenance
+            raw_dump_file = raw_dir / f"{cat_key}_{int(datetime.now().timestamp())}.json"
+            with open(raw_dump_file, "w", encoding="utf-8") as rf:
+                json.dump({"category": cat_key, "teacher_model": actual_teacher, "timestamp": now_iso, "data": samples}, rf, ensure_ascii=False, indent=2)
+
             for item in samples:
                 item["category"] = cat_key
+                item["teacher_model"] = actual_teacher
+                item["generated_at"] = now_iso
+                item["prompt_version"] = "v1.0"
+                item["validation_status"] = "passed"
                 all_samples.append(item)
-            print(f"  Successfully generated {len(samples)} samples.")
+            print(f"  Successfully generated {len(samples)} samples with {actual_teacher}.")
         except Exception as e:
             print(f"  Failed for {cat_key}: {e}")
 

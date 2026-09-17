@@ -29,7 +29,9 @@ wheels/
 *.safetensors
 *.pt
 *.pth
-data/raw/
+data/raw/*
+!data/raw/.gitkeep
+data/pilot.jsonl
 models/
 lora_output/
 wandb/

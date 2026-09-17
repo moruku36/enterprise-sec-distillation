@@ -1,16 +1,262 @@
 [
   {
     "test_id": "eval_01",
-    "category": "Incident Response / Active Directory",
-    "prompt": "社内LAN内の複数端末でBitLockerの不正暗号化を装うランサムウェアの挙動を検知しました。ドメインコントローラーへの侵入を防ぎつつ、感染拡大を阻止するための最初の30分で実施すべきトリアージ手順と、全社ネットワークレベルでの緊急遮断判断基準を具体的に提示してください。",
-    "distilled_response": "1. ログインログを観察し、BitLockerが無効化されている端末を特定します。\n2. BitLockerマネージャー（BCDM）の「BitLocker Key Recovery」（ID: 0x8037）で復元キーを取得。その後、端末から完全に消去してください。\n3. 感染状態を確認するために、コマンドラインでの「diskpart /s BitLocker-Recovery.txt」実行により、BitLockerの暗号化キーが破棄されたことを検証します。\n4. 端末を全制御（PUP）し、その上から「gpupdate /force」でGPO適用を強制します。これにより、BitLockerの設定（Enabled: False, Encrypt: True）を無効化し、ユーザーが再度暗号化を試みるのを阻止します。\n5. セキュリティ・ポリシー（SOP）に基づき、感染拡大防止のため、端末を「ゼロトラスト」（ZT）アクセス制御で一時停止します。これは、ユーザーがログインする際に、その端末への完全な認証（MFA含む）および「BitLocker」の有効化状態を確認し、異常を即座に検知・対応させるためです。\n6. エクスプロイトや感染源が特定できない場合、全社ネットワークレベルでの遮断判断基準（DLP）は「ゼロトラスト」ポリシーの適用と一時停止により、不正アクセスを完全に阻止することです。",
-    "base_response": "私はランサムウェア対策の専門家ではありません。ただし、安全な環境を維持するために、最初の 30 分間で実施するトリアージ手順と、全社ネットワークレベルでの緊急遮断判断基準を提供します。\n\n**トリアージ手順（最初の 30 分間）**\n\n1.  **対象のコンピュータの隔離**:感染したコンピュータを社内のLANから隔離し、他のコンピュータから分離します。\n2.  **LANのトラフィックの監視**:LANのトラフィックを監視し、ランサムウェアの動作を確認します。\n3.  **ドメインコントローラーの確認**:ドメインコントローラーに接続されたコンピュータのリストを確認し、ランサムウェアの影響を受けたコンピュータのリストをドメインコントローラーに提供します。\n4.  **感染拡大を阻止するための対策**:LANのトラフィックの監視とLANの隔離を実施し、感染拡大を阻止します。\n5.  **緊急のバックアップ**:感染したコンピュータから重要なデータを緊急のバックアップします。\n\n**全社ネットワークレベルでの緊急遮断判断基準**\n\n1.  **LANのトラフィックの増加**:ランサムウェアの動作がLANのトラフィックを増やすと考えられる場合は緊急遮断を実施します。\n2.  **ドメインコントローラーへの侵入**:ドメインコントローラーに接続されたコンピュータのリストがランサムウェアの影響を受けたコンピュータのリストと一致する場合は緊急遮断を実施します。\n3.  **LANの隔離**:LANのトラフィックの監視が困難となる場合は緊急遮断を実施します。\n4.  **緊急のバックアップ**:緊急のバックアップが困難となる場合は緊急遮断を実施します。\n\nこのような状況で緊急遮断を実施する際には、社内のLANのトラフィックを監視し、感染拡大を阻止し、重要なデータのバックアップを実施することが非常に重要です。"
+    "category": "incident_response",
+    "instruction": "社内LAN内の複数端末でBitLockerの不正暗号化を装うランサムウェアの挙動を検知しました。ドメインコントローラーへの侵入を防ぎつつ、感染拡大を阻止するための最初の30分で実施すべきトリアージ手順と、全社ネットワークレベルでの緊急遮断判断基準を具体的に提示してください。",
+    "input": "検知元: EDRアラート。複数エンドポイントで大量のファイル拡張子変更とボリューム暗号化イベントが発生中。",
+    "distilled_model": "sec-defense",
+    "distilled_response": "[DRY_RUN] Simulated distilled output for eval_01",
+    "distilled_evaluation": {
+      "required_concepts_total": 4,
+      "required_concepts_matched": 0,
+      "coverage_ratio": 0.0,
+      "has_concrete_commands": false,
+      "detected_hallucination_patterns": [],
+      "fact_check_notes": "BitLocker操作の正規CLIはmanage-bde（manage-bde -status, manage-bde -protectorsなど）。diskpart /s による暗号化キー破棄検証や存在しないエラーコード0x8037はハルシネーションの典型例。"
+    },
+    "base_model": "qwen2.5:3b",
+    "base_response": "[DRY_RUN] Simulated base output for eval_01",
+    "base_evaluation": {
+      "required_concepts_total": 4,
+      "required_concepts_matched": 0,
+      "coverage_ratio": 0.0,
+      "has_concrete_commands": false,
+      "detected_hallucination_patterns": [],
+      "fact_check_notes": "BitLocker操作の正規CLIはmanage-bde（manage-bde -status, manage-bde -protectorsなど）。diskpart /s による暗号化キー破棄検証や存在しないエラーコード0x8037はハルシネーションの典型例。"
+    }
   },
   {
     "test_id": "eval_02",
-    "category": "Cloud Security / AWS",
-    "prompt": "AWS環境において、GuardDutyから「UnauthorizedAccess:IAMUser/InstanceCredentialExfiltration.OutsideAWS」アラートが発報されました。EC2インスタンスプロファイルの認証情報が外部に漏洩した疑いがあります。被害の局限化手順、侵害された認証情報の無効化コマンド、およびメタデータサービス（IMDSv2）強制適用のTerraformまたはCLIコマンドを提示してください。",
-    "distilled_response": "【1】インシデント対応手順：\n\n1) GuardDutyから「UnauthorizedAccess:IAMUser/InstanceCredentialExfiltration.OutsideAWS」アラートを受け取った後、直ちに「GuardDuty Detectors - Instances」ページ（https://console.aws.amazon.com/guardduty/v2#/detectors）で影響を受けたインスタンスを検索し、セキュリティ警報を表示します。\n\n2) 「AWS Security Hub (SecurityHub)」サービスの「Findings」タブから、同一アカウントとセクション内の他のインスタンス（「EC2 Instances - IAM Instance Profiles with Unrestricted Access」）も調査します。\n\n【2】影響範囲を限定する手順：\n\n1) GuardDutyの「Inspection Filters」（https://console.aws.amazon.com/guardduty/v2#/inspections/filters）から、「AWS Security Hub (SecurityHub)」サービス内のセキュリティ警報をフィルタリングし、特定のインスタンスに絞り込みます。\n\n【3】無効化する認証情報（IAMInstanceProfileCredentials）を特定および削除：\n\n1) 「EC2 Instances - IAM Instance Profiles with Unrestricted Access」警報で特定されたインスタンスに対して「AWS Security Hub (SecurityHub)」から、インスタンスのメタデータサービス（IMDSv2）アクセス権限を無効化するためのセキュリティ警報を生成します。\n\n2) これらの警報を、「Amazon SNS (SNS)」または「Amazon CloudWatch Event (CloudWatch Events)」でトリガーし、自動的に影響を受けたインスタンスに対する「aws iam revoke-instance-profile-credentials-permission」というIAMポリシーの作成・削除を実行します。\n\n【4】IMDSv2強制適用の手順（Terraform）：\n\n1. 「aws_securityhub_findings」タグ付きのセキュリティ警報を作成します。例：「aws_securityhub_findings \\\"InstanceCredentialExfiltration\\\" { Name = \\\"UnauthorizedAccess:IAMUser/InstanceCredentialExfiltration.OutsideAWS\\\" Severity = 70 }」\n\n2. 「aws_iam_instance_profile」インスタンスプロファイルを更新し、IMDSv2のアクセス許可を無効化します。例：\n```bash\nresource \"aws_iam_instance_profile\" \"restricted\" {\n  name     = \"RestrictedInstanceProfile\"\n  roles    = [\"RoleName\"]\n\n  tags = {\n    SecurityHubFindings = \"UnauthorizedAccess:IAMUser/InstanceCredentialExfiltration.OutsideAWS\"\n  }\n}\n\nresource \"aws_iam_instance_profile_association\" \"restricted\" {\n  instance_id = \"${data.aws_instances.instances.id}\"\n  role        = aws_iam_role.restricted.name\n}\n```\n\n3. 「aws_securityhub_findings\\\"InstanceCredentialExfiltration\\\"」警報を「Severity: Critical」にアップデートし、IMDSv2の強制適用を即時開始します。",
-    "base_response": "AWS環境における「UnauthorizedAccess:IAMUser/InstanceCredentialExfiltration.OutsideAWS」アラートを受けた場合、被害の局限化、侵害された認証情報の無効化、メタデータサービス（IMDSv2）の強制適用を行う必要があります。\n\n### 1. 被害の局限化\n\nまず、潜在的に侵害されたすべてのEC2インスタンスを停止し、そのアクセスを制限する必要があります。\n\n#### Terraform コマンド\n```terraform\n# 対象EC2インスタンスのIDを取得\ndata \"aws_instances\" \"target_instances\" {\n  filter {\n    name   = \"instance-state-name\"\n    values = [\"running\"]\n  }\n}\n\n# 対象EC2インスタンスを停止\nresource \"aws_instance\" \"target_instances\" {\n  count = data.aws_instances.target_instances.count\n\n  instance_id = data.aws_instances.target_instances.ids[count.index]\n\n  lifecycle {\n    ignore_changes = [\n      \"instance_id\"\n    ]\n  }\n}\n```\n\n#### AWS CLI コマンド\n```bash\n# 対象EC2インスタンスのIDを取得\naws ec2 describe-instances --query 'Reservations[*].Instances[*].InstanceId'\n\n# 対象EC2インスタンスを停止\naws ec2 stop-instances --instance-ids <インスタンスID>\n```\n\n### 2. 侵害された認証情報の無効化\n\n侵害された認証情報を無効化するには、AWS IAM を使用します。\n\n#### Terraform コマンド\n```terraform\n# IAM ユーザーを取得\ndata \"aws_iam_user\" \"target_user\" {\n  user_name = \"<侵害されたユーザーの名前>\"\n}\n\n# IAM ユーザーのパスワードを無効化\nresource \"aws_iam_user\" \"target_user\" {\n  count = 0\n\n  user_name = data.aws_iam_user.target_user.user_name\n\n  lifecycle {\n    ignore_changes = [\n      \"user_name\"\n    ]\n  }\n}\n```\n\n#### AWS CLI コマンド\n```bash\n# IAM ユーザーを取得\naws iam get-user --user-name <侵害されたユーザーの名前>\n\n# IAM ユーザーのパスワードを無効化\naws iam update-login-profile --user-name <侵害されたユーザーの名前> --password-reset-required\n```\n\n### 3. メタデータサービス（IMDSv2）の強制適用\n\nIMDSv2 を強制適用するには、IAM ポリシーを作成し、対象の EC2 インスタンスに適用する必要があります。\n\n#### Terraform コマンド\n```terraform\n# IAM ポリシーを作成\nresource \"aws_iam_policy\" \"imdsv2_policy\" {\n  name        = \"IMDSv2Policy\"\n  description = \"IMDSv2 Policy\"\n\n  policy      = jsonencode({\n    Version = \"2012-10-17\"\n    Statement = [\n      {\n        Sid       = \"IMDSv2Policy\"\n        Effect    = \"Allow\"\n        Action    = [\"ec2:GetInstanceMetadata\"]\n        Resource  = \"*\"\n        Condition = {\n          StringLike = {\n            \"ec2:InstanceMetadata.{1}.Version\" = \"2\"\n          }\n        }\n      }\n    ]\n  })\n}\n\n# IAM ポリシーを EC2 インスタンスに適用\nresource \"aws_iam_instance_profile\" \"imdsv2_instance_profile\" {\n  name = \"IMDSv2InstanceProfile\"\n\n  role = aws_iam_role.imdsv2_role.name\n}\n\nresource \"aws_iam_role\" \"imdsv2_role\" {\n  name = \"IMDSv2Role\"\n\n  assume_role_policy = jsonencode({\n    Version = \"2012-10-17\"\n    Statement = [\n      {\n        Sid       = \"IMDSv2Policy\"\n        Effect    = \"Allow\"\n        Principal = {\n          Service = \"ec2.amazonaws.com\"\n        }\n        Action = \"sts:AssumeRole\"\n      }\n    ]\n  })\n}\n\nresource \"aws_iam_role_policy_attachment\" \"imdsv2_role_policy_attachment\" {\n  role       = aws_iam_role.imdsv2_role.name\n  policy_arn = aws_iam_policy.imdsv2_policy.arn\n}\n```\n\n#### AWS CLI コマンド\n```bash\n# IAM ポリシーを作成\naws iam create-policy --policy-name IMDSv2Policy --policy-document '{\n  \"Version\": \"2012-10-17\",\n  \"Statement\": [\n    {\n      \"Sid\": \"IMDSv2Policy\",\n      \"Effect\": \"Allow\",\n      \"Action\": \"ec2:GetInstanceMetadata\",\n      \"Resource\": \"*\",\n      \"Condition\": {\n        \"StringLike\": {\n          \"ec2:InstanceMetadata.{1}.Version\": \"2\"\n        }\n      }\n    }\n  ]\n}'\n\n# IAM ポリシーを EC2 インスタンスに適用\naws iam create-instance-profile --instance-profile-name IMDSv2InstanceProfile\naws iam attach-role-policy --role-name IMDSv2Role --policy-arn <IAM ポリシーのARN>\naws iam create-role --role-name IMDSv2Role --assume-role-policy-document '{\n  \"Version\": \"2012-10-17\",\n  \"Statement\": [\n    {\n      \"Sid\": \"IMDSv2Policy\",\n      \"Effect\": \"Allow\",\n      \"Principal\": {\n        \"Service\": \"ec2.amazonaws.com\"\n      },\n      \"Action\": \"sts:AssumeRole\"\n    }\n  ]\n}'\n```\n\nこれらの手順を実施することで、被害の局限化、侵害された認証情報の無効化、メタデータサービス（IMDSv2）の強制適用が可能になります。"
+    "category": "cloud_security",
+    "instruction": "AWS環境において、GuardDutyから「UnauthorizedAccess:IAMUser/InstanceCredentialExfiltration.OutsideAWS」アラートが発報されました。EC2インスタンスプロファイルの認証情報が外部に漏洩した疑いがあります。被害の局限化手順、侵害された認証情報の無効化コマンド、およびメタデータサービス（IMDSv2）強制適用のTerraformまたはCLIコマンドを提示してください。",
+    "input": "対象EC2: i-0123456789abcdef0、付与ロール: AppServerRole",
+    "distilled_model": "sec-defense",
+    "distilled_response": "[DRY_RUN] Simulated distilled output for eval_02",
+    "distilled_evaluation": {
+      "required_concepts_total": 3,
+      "required_concepts_matched": 0,
+      "coverage_ratio": 0.0,
+      "has_concrete_commands": false,
+      "detected_hallucination_patterns": [],
+      "fact_check_notes": "既存EC2のIMDSv2必須化コマンドは 'aws ec2 modify-instance-metadata-options --instance-id <id> --http-tokens required --http-endpoint enabled'。存在しないAPI 'aws iam revoke-instance-profile-credentials-permission' は典型的なハルシネーション。"
+    },
+    "base_model": "qwen2.5:3b",
+    "base_response": "[DRY_RUN] Simulated base output for eval_02",
+    "base_evaluation": {
+      "required_concepts_total": 3,
+      "required_concepts_matched": 0,
+      "coverage_ratio": 0.0,
+      "has_concrete_commands": false,
+      "detected_hallucination_patterns": [],
+      "fact_check_notes": "既存EC2のIMDSv2必須化コマンドは 'aws ec2 modify-instance-metadata-options --instance-id <id> --http-tokens required --http-endpoint enabled'。存在しないAPI 'aws iam revoke-instance-profile-credentials-permission' は典型的なハルシネーション。"
+    }
+  },
+  {
+    "test_id": "eval_03",
+    "category": "zero_trust_iam",
+    "instruction": "社内Active Directory環境でKerberoasting攻撃（イベントID 4769: Kerberos サービスチケット要求）の急増が検知されました。チケットの暗号化タイプがRC4（0x17）で要求されています。SOCアナリストとして直ちに実行すべきSPN保有アカウントの特定手順、初期封じ込め策、および恒久的な脆弱性解消手順を提示してください。",
+    "input": "ドメイン: corp.internal、SIEMにて暗号化タイプ 0x17 のEvent ID 4769が1分間に500件以上記録。",
+    "distilled_model": "sec-defense",
+    "distilled_response": "[DRY_RUN] Simulated distilled output for eval_03",
+    "distilled_evaluation": {
+      "required_concepts_total": 4,
+      "required_concepts_matched": 0,
+      "coverage_ratio": 0.0,
+      "has_concrete_commands": false,
+      "detected_hallucination_patterns": [],
+      "fact_check_notes": "Kerberoastingの根本対策はサービスアカウントのパスワード長強化またはGroup Managed Service Accounts (gMSA)への移行。RC4暗号化タイプの無効化。"
+    },
+    "base_model": "qwen2.5:3b",
+    "base_response": "[DRY_RUN] Simulated base output for eval_03",
+    "base_evaluation": {
+      "required_concepts_total": 4,
+      "required_concepts_matched": 0,
+      "coverage_ratio": 0.0,
+      "has_concrete_commands": false,
+      "detected_hallucination_patterns": [],
+      "fact_check_notes": "Kerberoastingの根本対策はサービスアカウントのパスワード長強化またはGroup Managed Service Accounts (gMSA)への移行。RC4暗号化タイプの無効化。"
+    }
+  },
+  {
+    "test_id": "eval_04",
+    "category": "soc_siem_edr",
+    "instruction": "Microsoft Sentinel / KQL環境において、単一ホスト上で短時間に通常と異なる不審な親プロセス（例: wmwiprvse.exe, winword.exe）から powershell.exe または cmd.exe が起動され、base64エンコードされたコマンドが実行されたイベントを検知するKQLクエリを作成してください。",
+    "input": "対象テーブル: DeviceProcessEvents (Defender for Endpoint) または SecurityEvent",
+    "distilled_model": "sec-defense",
+    "distilled_response": "[DRY_RUN] Simulated distilled output for eval_04",
+    "distilled_evaluation": {
+      "required_concepts_total": 4,
+      "required_concepts_matched": 0,
+      "coverage_ratio": 0.0,
+      "has_concrete_commands": false,
+      "detected_hallucination_patterns": [],
+      "fact_check_notes": "KQL文法として where, has_any, project などが正しく使用されているか。"
+    },
+    "base_model": "qwen2.5:3b",
+    "base_response": "[DRY_RUN] Simulated base output for eval_04",
+    "base_evaluation": {
+      "required_concepts_total": 4,
+      "required_concepts_matched": 0,
+      "coverage_ratio": 0.0,
+      "has_concrete_commands": false,
+      "detected_hallucination_patterns": [],
+      "fact_check_notes": "KQL文法として where, has_any, project などが正しく使用されているか。"
+    }
+  },
+  {
+    "test_id": "eval_05",
+    "category": "network_perimeter",
+    "instruction": "境界ファイアウォールログにおいて、同一送信元IPから外部不審ドメインに対する高頻度の微小DNSクエリ（TXTレコード要求）が観測されました。DNSトンネリング（C2通信またはデータ持ち出し）が疑われます。ネットワークエンジニアとして実施すべきパケットキャプチャ・調査手順と、DNSセキュリティ機能を用いた即時ブロック手順を提示してください。",
+    "input": "送信元ホスト: 192.168.10.45、宛先DNS: 社内キャッシュDNS経由で外部NSへクエリ転送中。",
+    "distilled_model": "sec-defense",
+    "distilled_response": "[DRY_RUN] Simulated distilled output for eval_05",
+    "distilled_evaluation": {
+      "required_concepts_total": 3,
+      "required_concepts_matched": 0,
+      "coverage_ratio": 0.0,
+      "has_concrete_commands": false,
+      "detected_hallucination_patterns": [],
+      "fact_check_notes": "DNSトンネリング検出にはサブドメイン長の異常や高頻度TXT/NULLレコード要求の分析が重要。"
+    },
+    "base_model": "qwen2.5:3b",
+    "base_response": "[DRY_RUN] Simulated base output for eval_05",
+    "base_evaluation": {
+      "required_concepts_total": 3,
+      "required_concepts_matched": 0,
+      "coverage_ratio": 0.0,
+      "has_concrete_commands": false,
+      "detected_hallucination_patterns": [],
+      "fact_check_notes": "DNSトンネリング検出にはサブドメイン長の異常や高頻度TXT/NULLレコード要求の分析が重要。"
+    }
+  },
+  {
+    "test_id": "eval_06",
+    "category": "cloud_security",
+    "instruction": "Azure環境において、Microsoft Defender for Cloudから「Storage account public access is allowed」および「Suspicious data access to Blob storage from anonymous IP」の重大アラートが発報されました。データ漏洩リスクを最小化するためのストレージアカウント設定変更CLI（az cli）と、Private Endpointへの移行手順を提示してください。",
+    "input": "対象ストレージ: stcorpfinancial01、リソースグループ: rg-core-data",
+    "distilled_model": "sec-defense",
+    "distilled_response": "[DRY_RUN] Simulated distilled output for eval_06",
+    "distilled_evaluation": {
+      "required_concepts_total": 4,
+      "required_concepts_matched": 0,
+      "coverage_ratio": 0.0,
+      "has_concrete_commands": false,
+      "detected_hallucination_patterns": [],
+      "fact_check_notes": "正しいaz cliコマンド構文の提示。"
+    },
+    "base_model": "qwen2.5:3b",
+    "base_response": "[DRY_RUN] Simulated base output for eval_06",
+    "base_evaluation": {
+      "required_concepts_total": 4,
+      "required_concepts_matched": 0,
+      "coverage_ratio": 0.0,
+      "has_concrete_commands": false,
+      "detected_hallucination_patterns": [],
+      "fact_check_notes": "正しいaz cliコマンド構文の提示。"
+    }
+  },
+  {
+    "test_id": "eval_07",
+    "category": "zero_trust_iam",
+    "instruction": "Microsoft Entra ID (旧Azure AD) において、特定の役員アカウントに対して「不審なサインイン（リスクの高いサインイン: Travel Time Anomaly / Anonymous IP）」が検知されました。条件付きアクセス（Conditional Access）ポリシーの設計見直し方針と、侵害されたセッションの即時失効手順（PowerShell / Graph API）を提示してください。",
+    "input": "対象アカウント: executive-ciso@example.com、リスクレベル: High",
+    "distilled_model": "sec-defense",
+    "distilled_response": "[DRY_RUN] Simulated distilled output for eval_07",
+    "distilled_evaluation": {
+      "required_concepts_total": 4,
+      "required_concepts_matched": 0,
+      "coverage_ratio": 0.0,
+      "has_concrete_commands": false,
+      "detected_hallucination_patterns": [],
+      "fact_check_notes": "旧AzureAD PowerShell (Revoke-AzureADUserAllRefreshToken) ではなく現在のMicrosoft Graph PowerShell (Revoke-MgUserSignInSession) の使用が推奨される。"
+    },
+    "base_model": "qwen2.5:3b",
+    "base_response": "[DRY_RUN] Simulated base output for eval_07",
+    "base_evaluation": {
+      "required_concepts_total": 4,
+      "required_concepts_matched": 0,
+      "coverage_ratio": 0.0,
+      "has_concrete_commands": false,
+      "detected_hallucination_patterns": [],
+      "fact_check_notes": "旧AzureAD PowerShell (Revoke-AzureADUserAllRefreshToken) ではなく現在のMicrosoft Graph PowerShell (Revoke-MgUserSignInSession) の使用が推奨される。"
+    }
+  },
+  {
+    "test_id": "eval_08",
+    "category": "incident_response",
+    "instruction": "Linux本番サーバー（Ubuntu 22.04 LTS）で不正なSSH公開鍵の追加およびcronへの不審スクリプト登録が確認されました。ライブレスポンス（動的証拠保全）において、揮発性メモリとネットワーク接続状態を保全しつつ、攻撃者のC2プロセスを特定するコマンドライン手順を提示してください。",
+    "input": "ホスト名: prod-app-03、SSH接続ログに未知のIPからのAccepted publickey記録あり。",
+    "distilled_model": "sec-defense",
+    "distilled_response": "[DRY_RUN] Simulated distilled output for eval_08",
+    "distilled_evaluation": {
+      "required_concepts_total": 4,
+      "required_concepts_matched": 0,
+      "coverage_ratio": 0.0,
+      "has_concrete_commands": false,
+      "detected_hallucination_patterns": [],
+      "fact_check_notes": "証拠保全の順序（RFC 3227: 揮発性の順序）。ディスクダンプ前にメモリやネットワークソケットを保全する。"
+    },
+    "base_model": "qwen2.5:3b",
+    "base_response": "[DRY_RUN] Simulated base output for eval_08",
+    "base_evaluation": {
+      "required_concepts_total": 4,
+      "required_concepts_matched": 0,
+      "coverage_ratio": 0.0,
+      "has_concrete_commands": false,
+      "detected_hallucination_patterns": [],
+      "fact_check_notes": "証拠保全の順序（RFC 3227: 揮発性の順序）。ディスクダンプ前にメモリやネットワークソケットを保全する。"
+    }
+  },
+  {
+    "test_id": "eval_09",
+    "category": "soc_siem_edr",
+    "instruction": "EDR（CrowdStrike Falcon）において、開発者端末上で「Credential Access: Dumping LSASS via ProcDump or Mimikatz」に合致する検知（Severity: Critical）が発生しました。SOC一次対応として端末のネットワーク隔離（Network Containment）を実行した後、二次被害を防ぐために実施すべきメモリ調査とADドメイン上のクレデンシャル保護対応を提示してください。",
+    "input": "検知ホスト: DEV-LAPTOP-089、検知プロセス: procdump.exe -ma lsass.exe",
+    "distilled_model": "sec-defense",
+    "distilled_response": "[DRY_RUN] Simulated distilled output for eval_09",
+    "distilled_evaluation": {
+      "required_concepts_total": 4,
+      "required_concepts_matched": 0,
+      "coverage_ratio": 0.0,
+      "has_concrete_commands": false,
+      "detected_hallucination_patterns": [],
+      "fact_check_notes": "LSASSダンプ成功時は、当該端末にキャッシュされていた資格情報（特に特権アカウント）の侵害を前提としたアカウントリセットが必要。"
+    },
+    "base_model": "qwen2.5:3b",
+    "base_response": "[DRY_RUN] Simulated base output for eval_09",
+    "base_evaluation": {
+      "required_concepts_total": 4,
+      "required_concepts_matched": 0,
+      "coverage_ratio": 0.0,
+      "has_concrete_commands": false,
+      "detected_hallucination_patterns": [],
+      "fact_check_notes": "LSASSダンプ成功時は、当該端末にキャッシュされていた資格情報（特に特権アカウント）の侵害を前提としたアカウントリセットが必要。"
+    }
+  },
+  {
+    "test_id": "eval_10",
+    "category": "network_perimeter",
+    "instruction": "VPNゲートウェイ機器（SSL-VPN）の既知脆弱性を突いた攻撃により、セッションセッションハイジャックまたは管理者認証情報の窃取が疑われるアラートが社外SOCから通知されました。影響調査のために確認すべきログ種別、機器ファームウェア緊急パッチ適用手順の計画、およびゼロトラスト（ZTNA）移行に向けた短期的暫定策を提示してください。",
+    "input": "VPN機器: FortiGate / Pulse Secure 等、CVE未適用の可能性あり。",
+    "distilled_model": "sec-defense",
+    "distilled_response": "[DRY_RUN] Simulated distilled output for eval_10",
+    "distilled_evaluation": {
+      "required_concepts_total": 4,
+      "required_concepts_matched": 0,
+      "coverage_ratio": 0.0,
+      "has_concrete_commands": false,
+      "detected_hallucination_patterns": [],
+      "fact_check_notes": "SSL-VPN脆弱性ではセッション情報やローカル認証情報が漏洩しているケースが多いため、パッチ適用と全アカウントパスワードリセット・MFA再登録が必須。"
+    },
+    "base_model": "qwen2.5:3b",
+    "base_response": "[DRY_RUN] Simulated base output for eval_10",
+    "base_evaluation": {
+      "required_concepts_total": 4,
+      "required_concepts_matched": 0,
+      "coverage_ratio": 0.0,
+      "has_concrete_commands": false,
+      "detected_hallucination_patterns": [],
+      "fact_check_notes": "SSL-VPN脆弱性ではセッション情報やローカル認証情報が漏洩しているケースが多いため、パッチ適用と全アカウントパスワードリセット・MFA再登録が必須。"
+    }
   }
 ]
