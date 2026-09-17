@@ -7,26 +7,13 @@ RTX 3070 (8GB VRAM) に最適化された省メモリ設計。
 
 import os
 import json
-import torch
 import argparse
 from pathlib import Path
-from datasets import Dataset
-from transformers import (
-    AutoModelForCausalLM,
-    AutoTokenizer,
-    BitsAndBytesConfig,
-    TrainingArguments,
-    DataCollatorForSeq2Seq,
-)
-from peft import (
-    LoraConfig,
-    get_peft_model,
-    prepare_model_for_kbit_training,
-)
-from trl import SFTTrainer
 
 
 def load_qa_dataset(jsonl_path: str, tokenizer, max_length: int = 1536):
+    from datasets import Dataset
+
     data = []
     with open(jsonl_path, "r", encoding="utf-8") as f:
         for line in f:
@@ -65,6 +52,21 @@ def main():
     parser.add_argument("--lr", type=float, default=2e-4, help="Learning rate")
     parser.add_argument("--max_seq_length", type=int, default=1536, help="Maximum sequence length")
     args = parser.parse_args()
+
+    import torch
+    from transformers import (
+        AutoModelForCausalLM,
+        AutoTokenizer,
+        BitsAndBytesConfig,
+        TrainingArguments,
+        DataCollatorForSeq2Seq,
+    )
+    from peft import (
+        LoraConfig,
+        get_peft_model,
+        prepare_model_for_kbit_training,
+    )
+    from trl import SFTTrainer
 
     print(f"=== Starting QLoRA Training ===")
     print(f"Base Model: {args.base_model}")

@@ -38,6 +38,15 @@ class TestSmoke(unittest.TestCase):
         self.assertEqual(res.returncode, 0, f"generate_dataset.py --help failed:\n{res.stderr}")
         self.assertIn("Generate enterprise security dataset", res.stdout)
 
+    def test_train_lora_help(self):
+        res = subprocess.run(
+            [sys.executable, "src/train_lora.py", "--help"],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res.returncode, 0, f"train_lora.py --help failed:\n{res.stderr}")
+        self.assertIn("QLoRA training for Enterprise Security LLM", res.stdout)
+
     def test_modelfile_consistency(self):
         modelfile_path = Path("ollama/Modelfile")
         self.assertTrue(modelfile_path.exists(), "ollama/Modelfile must exist")

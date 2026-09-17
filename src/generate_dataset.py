@@ -4,6 +4,8 @@ Teacher モデル (Gemini API) を用いてエンタープライズセキュリ�
 高品質な instruction / output ペアを自動生成・検証するスクリプト。
 """
 
+from __future__ import annotations
+
 import os
 import json
 import argparse
@@ -58,7 +60,7 @@ import time
 
 from datetime import datetime, timezone
 
-def generate_questions_for_category(client: genai.Client, model: str, cat_key: str, count: int) -> tuple[List[dict], str]:
+def generate_questions_for_category(client: Any, model: str, cat_key: str, count: int) -> tuple[List[dict], str]:
     cat = CATEGORIES[cat_key]
     prompt = f"""あなたはエンタープライズサイバーセキュリティの最高責任者・エキスパートです。
 以下のカテゴリに関する、実務的で深みのある問答ペア（Instruction / Output）を {count} 件作成してください。
