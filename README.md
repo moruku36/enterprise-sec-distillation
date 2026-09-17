@@ -214,12 +214,13 @@ python src/evaluate.py --dry_run
 | :--- | :---: | :---: | :--- |
 | **平均要件充足度 (`coverage_score`)** | 0.46 | **0.53** | 必須要件チェックの充足率は微増 |
 | **実コマンド提示率 (`command_presence`)** | 50.0% (5/10) | **70.0% (7/10)** | 概念論からコマンドブロック提示への明らかなシフト |
-| **Known-Bad（非実在/危険構文）検知率** | **0.0% (0/10)** | 10.0% (1/10) | もっともらしい非実在・破壊的コマンドの混入リスクが増加 |
+| **Known-Bad（既知不正パターン）検知率** | **0.0% (0/10)** | 10.0% (1/10) | もっともらしい非実在・破壊的コマンドの混入リスクが増加 |
 | **要件合格率 (`PASS_STRICT` + `PASS_PARTIAL` + `PASS_GENERIC`)** | 50.0% (5/10) | **60.0% (6/10)** | 全体的な回答構成は改善傾向 |
 | **平均正確性スコア (`auto_accuracy_score` 1〜5)** | 2.80 | **3.00** | 出力形式はプロ的になるが、正確性の絶対値は発展途上 |
 
 > [!NOTE]
-> この集計結果は、**「少量SFTにより回答の具体性やコマンド出力意欲は向上するが、セキュリティ特有の正確性・事実性の保証には至らず、非実在コマンドの生成リスクを伴う」** という本PoCの主要発見を裏付けています。
+> - この集計結果は、**「少量SFTにより回答の具体性やコマンド出力意欲は向上するが、セキュリティ特有の正確性・事実性の保証には至らず、非実在コマンドの生成リスクを伴う」** という本PoCの主要発見を裏付けています。
+> - ※ ベースモデルのKnown-Bad検知率0.0%はハルシネーションが存在しないことを意味せず、現在定義済みのKnown-Bad検知ルールにヒットしなかったことを示します（Case 2のようにルール外の非実在引数や誤構文は双方に出現しています）。
 
 ### 代表的なテストケース比較
 
@@ -230,13 +231,13 @@ python src/evaluate.py --dry_run
   - 「エンドポイント間の通信状況確認」「ドメインコントローラーへの不正アクセス確認」など教科書的な概念論に終始。正規コマンド `manage-bde` の提示はなし。
 - **蒸留モデル (`sec-defense:3B`)**:
   - `coverage_score: 0.00`, `command_presence: False`, `auto_validation_status: INSUFFICIENT`
-  - Event ID（4625, 4760）などの専門用語は出現するものの、正規のBitLocker検証コマンドは提示できず、「如月」といった架空ツールや曖昧な遮断基準に言及。
+  - 「如月」「E8」といった実在性を確認できないツール名や曖昧な遮断操作を提示し、正規のBitLocker確認コマンド `manage-bde` は提示できなかった。
 
 ### Case 2: AWS GuardDuty インスタンス認証情報漏洩 (`eval_02`)
 - **質問**: GuardDuty「InstanceCredentialExfiltration.OutsideAWS」検知時の被害局限化、セッション無効化、IMDSv2強制適用手順。
 - **ベースモデル (`qwen2.5:3b`)**:
   - `coverage_score: 0.00`, `command_presence: True`, `auto_validation_status: INSUFFICIENT`
-  - `modify-instance-metadata-options` を提示するも、`--http-mode none` という非実在オプションを捏造。
+  - `aws iam get-login-password` や `--http-injector-enabled false` など、実在しない・不適切なCLI構文を提示。IMDSv2必須化に必要な `--http-tokens required` も提示できなかった。
 - **蒸留モデル (`sec-defense:3B`)**:
   - `coverage_score: 0.00`, `command_presence: True`, `known_bad_pattern_count: 3`, `auto_validation_status: KNOWN_BAD_DETECTED`
   - コマンドラインの出力意欲は極めて高いが、`aws efs rm-mountpoint`, `aws s3api delete-bucket`, `--no-mfa-enabled` といった無関係かつ非実在の危険コマンドを多数生成。IMDSv2でも必須となる `--http-tokens required` が欠落。
