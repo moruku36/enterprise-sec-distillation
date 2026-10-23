@@ -249,6 +249,7 @@ class TestFailClosed(Workdir):
         path.write_text(json.dumps(review) + "\n", encoding="utf-8")
         self.assertEqual(run_main("--root", str(self.tmp), "--config", str(cfg),
                                   "--backend", "cached", "--output", str(self.tmp / "third")), 1)
+        self.assertFalse((self.tmp / "third").exists())
 
     def test_legacy_modification_detected(self):
         with open(self.tmp / "data/train.jsonl", "ab") as f:
