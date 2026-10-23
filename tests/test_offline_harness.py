@@ -12,6 +12,8 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
@@ -20,6 +22,7 @@ import backends  # noqa: E402
 import contracts  # noqa: E402
 import evaluate  # noqa: E402
 import metrics  # noqa: E402
+import train_lora  # noqa: E402
 import validate_data  # noqa: E402
 from retrieval import build_corpus, get_context  # noqa: E402
 
@@ -126,7 +129,7 @@ class TestMetrics(unittest.TestCase):
     def test_unsupported_syntax_is_not_valid(self):  # 11
         self.assertEqual(metrics.check_command_syntax("kubectl get pods"), "unsupported")
         self.assertEqual(metrics.check_command_syntax(
-            "aws ec2 modify-instance-metadata-options --instance-id i-1 --http-tokens required"), "valid")
+            "aws ec2 modify-instance-metadata-options --instance-id i-0123456789abcdef0 --http-tokens required"), "valid")
         self.assertEqual(metrics.check_command_syntax(
             "aws ec2 modify-instance-metadata-options --instance-id i-1 --http-tokens maybe"), "invalid")
         self.assertEqual(metrics.check_command_syntax("aws ec2 modify-instance-metadata-options --http-tokens required"), "invalid")
@@ -135,9 +138,38 @@ class TestMetrics(unittest.TestCase):
         ex = [e for e in EXAMPLES if e["example_id"] == "fx_d1"]
         m = metrics.compute_metrics(ex, {"fx_d1": pred("fx_d1")}, KEYS)
         self.assertIsNone(m["review"]["selective_correctness"])
-        rv = {"fx_d1": {"example_id": "fx_d1", "task_satisfied": True, "severe_unsafe": False, "claims_supported": [True]}}
-        m = metrics.compute_metrics(ex, {"fx_d1": pred("fx_d1")}, KEYS, rv)
+        p = pred("fx_d1", claims=[{"claim_id": "c1", "text": "reviewed"}])
+        rv = {"fx_d1": {"example_id": "fx_d1", "run_hash": "a" * 64,
+                         "prediction_hash": __import__("run_manifest").canonical_hash(p), "claim_ids": ["c1"],
+                         "reviewer_id": "human-1", "reviewed_at": "2026-10-23", "reason": "checked",
+                         "task_satisfied": True, "severe_unsafe": False, "claims_supported": {"c1": True}}}
+        m = metrics.compute_metrics(ex, {"fx_d1": p}, KEYS, rv, run_hash="a" * 64)
         self.assertEqual(m["review"]["selective_correctness"], 1.0)
+
+    def test_review_binding_rejects_different_answer_and_claims(self):
+        ex = [e for e in EXAMPLES if e["example_id"] == "fx_d1"]
+        p = pred("fx_d1", claims=[{"claim_id": "c1", "text": "first"}])
+        rv = {"example_id": "fx_d1", "run_hash": "a" * 64,
+              "prediction_hash": __import__("run_manifest").canonical_hash(p), "claim_ids": ["c1"],
+              "reviewer_id": "human-1", "reviewed_at": "2026-10-23", "reason": "checked",
+              "task_satisfied": True, "severe_unsafe": False, "claims_supported": {"c1": True}}
+        for change in ({"answer": "different"}, {"claims": [{"claim_id": "c2", "text": "other"}]}):
+            with self.subTest(change=change), self.assertRaises(contracts.ContractError):
+                metrics.compute_metrics(ex, {"fx_d1": {**p, **change}}, KEYS, {"fx_d1": rv}, run_hash="a" * 64)
+        for bad in ({"run_hash": "b" * 64}, {"reviewer_id": " "}, {"reason": ""},
+                    {"claims_supported": {"c1": True, "c2": True}}):
+            with self.subTest(bad=bad), self.assertRaises(contracts.ContractError):
+                metrics.compute_metrics(ex, {"fx_d1": p}, KEYS, {"fx_d1": {**rv, **bad}}, run_hash="a" * 64)
+
+    def test_command_values_are_not_confused_with_flags(self):
+        stem = "aws ec2 modify-instance-metadata-options --instance-id i-0123456789abcdef0"
+        for suffix in ("--http-tokens", "--http-tokens --http-endpoint enabled",
+                       "--http-put-response-hop-limit nonsense", "--http-put-response-hop-limit 0",
+                       "--http-put-response-hop-limit 65", "--http-protocol-ipv6 nonsense"):
+            with self.subTest(suffix=suffix):
+                self.assertEqual(metrics.check_command_syntax(stem + " " + suffix), "invalid")
+        self.assertEqual(metrics.check_command_syntax(stem + " --future-flag x"), "unsupported")
+        self.assertEqual(metrics.check_command_syntax(stem + " --http-put-response-hop-limit 2"), "valid")
 
 
 class TestFailClosed(Workdir):
@@ -182,6 +214,43 @@ class TestFailClosed(Workdir):
     def test_locked_test_split_needs_explicit_flag(self):
         self.assertTrue(contracts.validate_config(dict(self.cfg, splits_to_evaluate=["test"])))
 
+    def test_duplicate_review_is_rejected_before_evaluation(self):
+        review = {"example_id": "fx_d1", "run_hash": "a" * 64, "prediction_hash": "b" * 64,
+                  "claim_ids": [], "claims_supported": {}, "reviewer_id": "person", "reviewed_at": "2026-10-23",
+                  "task_satisfied": False, "severe_unsafe": False, "reason": "checked"}
+        path = self.tmp / "data/v2/fixtures/reviews.jsonl"
+        path.write_text((json.dumps(review) + "\n") * 2, encoding="utf-8")
+        self.assertTrue(any("duplicate review" in e for e in self.validate()))
+
+    def test_review_attaches_only_to_same_run_and_prediction(self):
+        cfg = self.tmp / "configs/eval_offline.json"
+        first = self.tmp / "first"
+        self.assertEqual(run_main("--root", str(self.tmp), "--config", str(cfg),
+                                  "--backend", "cached", "--output", str(first)), 0)
+        manifest = json.loads((first / "manifest.json").read_text(encoding="utf-8"))
+        prediction = [p for p in contracts.load_jsonl(first / "predictions.jsonl")
+                      if p["example_id"] == "fx_d1"][0]
+        ids = [c["claim_id"] for c in prediction["claims"]]
+        review = {"example_id": "fx_d1", "run_hash": manifest["review_run_hash"],
+                  "prediction_hash": __import__("run_manifest").canonical_hash(prediction),
+                  "claim_ids": ids, "claims_supported": {cid: True for cid in ids},
+                  "reviewer_id": "person", "reviewed_at": "2026-10-23", "reason": "checked",
+                  "task_satisfied": True, "severe_unsafe": False}
+        path = self.tmp / "data/v2/fixtures/reviews.jsonl"
+        path.write_text(json.dumps(review) + "\n", encoding="utf-8")
+        second = self.tmp / "second"
+        self.assertEqual(run_main("--root", str(self.tmp), "--config", str(cfg),
+                                  "--backend", "cached", "--output", str(second)), 0)
+        result = json.loads((second / "metrics.json").read_text(encoding="utf-8"))
+        self.assertEqual(result["review"]["n_reviewed"], 1)
+        self.assertIsNone(result["review"]["selective_correctness"])
+        self.assertIsNone(result["review"]["severe_unsafe_rate_all"])
+        review["prediction_hash"] = "0" * 64
+        path.write_text(json.dumps(review) + "\n", encoding="utf-8")
+        self.assertEqual(run_main("--root", str(self.tmp), "--config", str(cfg),
+                                  "--backend", "cached", "--output", str(self.tmp / "third")), 1)
+        self.assertFalse((self.tmp / "third").exists())
+
     def test_legacy_modification_detected(self):
         with open(self.tmp / "data/train.jsonl", "ab") as f:
             f.write(b"\n{}")
@@ -194,7 +263,7 @@ class TestFailClosed(Workdir):
 
     def test_pilot_example_budget_is_blocked(self):
         pilot = json.loads((ROOT / "configs/pilot.example.json").read_text(encoding="utf-8"))
-        self.assertEqual(len(contracts.validate_pilot_config(pilot)), 7)
+        self.assertEqual(len(contracts.validate_pilot_config(pilot)), 8)
 
 
 class TestOutputsAndDeterminism(unittest.TestCase):
@@ -259,23 +328,20 @@ class TestOutputsAndDeterminism(unittest.TestCase):
 
 class TestBackendsAndRetrieval(unittest.TestCase):
     def test_same_request_to_both_systems(self):  # 10
-        corpus = build_corpus(SOURCES, CFG["allowed_source_review_status"])
-        seen = []
-
-        class Rec:
-            def __init__(self, tag):
-                self.tag = tag
-
-            def generate(self, req):
-                seen.append((self.tag, req["system_prompt"], req["generation"], req["prompt"], req["context"]))
-                return backends.RawResult("ok", "{}")
-        ex = EXAMPLES[0]
-        ctx = get_context(ex, corpus, "retrieved", 3)
-        req = {"example": ex, "context": ctx, "system_prompt": CFG["system_prompt"],
-               "generation": CFG["generation"], "prompt": ex["question"]}
-        for tag in ("base", "student"):
-            Rec(tag).generate(req)
-        self.assertEqual(seen[0][1:], seen[1][1:])
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            def run(backend, config, name):
+                cfg = root / (name + ".json")
+                cfg.write_text(json.dumps(config, ensure_ascii=False), encoding="utf-8")
+                out = root / name
+                self.assertEqual(run_main("--config", str(cfg), "--backend", backend,
+                                          "--output", str(out)), 0)
+                return json.loads((out / "manifest.json").read_text(encoding="utf-8"))["requests_hash"]
+            base = run("abstain", CFG, "base")
+            self.assertEqual(base, run("retrieval_only", CFG, "student"))
+            altered = copy.deepcopy(CFG)
+            altered["generation"]["seed"] += 1
+            self.assertNotEqual(base, run("retrieval_only", altered, "changed_seed"))
 
     def test_retrieval_modes_and_no_label_access(self):
         corpus = build_corpus(SOURCES, CFG["allowed_source_review_status"])
@@ -299,6 +365,57 @@ class TestNoHeavyImports(unittest.TestCase):
                 "print(bad); sys.exit(1 if bad else 0)")
         res = subprocess.run([sys.executable, "-I", "-c", code], cwd=ROOT, capture_output=True, text=True)
         self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+
+
+class TestLegacyEntryGates(unittest.TestCase):
+    def test_training_preflight_checks_pinned_dependency_versions_offline(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            cfg = json.loads((ROOT / "configs/pilot.example.json").read_text(encoding="utf-8"))
+            cfg["model"] = {"name": "Qwen/Qwen2.5-3B-Instruct", "revision": "pinned",
+                            "tokenizer_revision": "pinned", "license_checked": True}
+            cfg["budget"] = {"currency": "USD", "max_cost": 1, "max_input_tokens": 1000,
+                             "max_output_tokens": 1000, "max_requests": 1, "max_training_gpu_hours": 1,
+                             "max_models": 1, "max_storage_gb": 1}
+            config_path, data_path = root / "pilot.json", root / "approved.jsonl"
+            config_path.write_text(json.dumps(cfg), encoding="utf-8")
+            data_path.write_text(json.dumps({"instruction": "q", "output": "a", "validation_status": "passed",
+                                             "source_verified": True, "reviewer_id": "person",
+                                             "reviewed_at": "2026-10-23"}) + "\n", encoding="utf-8")
+            args = SimpleNamespace(config=str(config_path), base_model=cfg["model"]["name"], epochs=1,
+                                   batch_size=1, grad_accum=1, max_seq_length=128, lr=0.0002,
+                                   output_dir=str(root / "adapter"), data_path=str(data_path))
+            versions = {"trl": "0.15.1", "transformers": "4.49.0", "datasets": "3.3.2",
+                        "peft": "0.14.0", "bitsandbytes": "0.45.3", "accelerate": "1.4.0"}
+            with patch("stage_gate.metadata.version", side_effect=versions.get):
+                self.assertEqual(train_lora.preflight(args), cfg)
+            versions["trl"] = "0.16.0"
+            with patch("stage_gate.metadata.version", side_effect=versions.get):
+                with self.assertRaises(contracts.ContractError):
+                    train_lora.preflight(args)
+
+    def test_generator_dry_run_writes_nothing_and_legacy_path_fails(self):
+        with tempfile.TemporaryDirectory() as d:
+            output, raw = Path(d) / "new.jsonl", Path(d) / "raw"
+            cmd = [sys.executable, "src/generate_dataset.py", "--output", str(output), "--raw_dir", str(raw)]
+            result = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(output.exists())
+            self.assertFalse(raw.exists())
+            result = subprocess.run(cmd + ["--execute"], cwd=ROOT, capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(output.exists())
+            result = subprocess.run([sys.executable, "src/generate_dataset.py", "--output", "data/train.jsonl",
+                                     "--raw_dir", str(raw)], cwd=ROOT, capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+
+    def test_training_and_merge_default_block_before_importing_ml(self):
+        for script in ("train_lora.py", "merge_lora.py"):
+            with self.subTest(script=script):
+                result = subprocess.run([sys.executable, f"src/{script}"], cwd=ROOT,
+                                        capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("blocked by default", result.stdout)
 
 
 if __name__ == "__main__":

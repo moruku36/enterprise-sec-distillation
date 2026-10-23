@@ -39,7 +39,7 @@ def file_hash(path: Path) -> str:
 
 def build_manifest(root: Path, config: Dict[str, Any], backend_name: str, result_kind: str,
                    data_files: Dict[str, Path], example_ids: List[str], prediction_hash: str,
-                   requests_hash: str) -> Dict[str, Any]:
+                   requests_hash: str, review_run_hash: str, model_name: str) -> Dict[str, Any]:
     """content_hash は created_at を除く全項目から計算する (同一入力 → 同一ハッシュ)。"""
     body = {
         "schema_version": SCHEMA_VERSION,
@@ -55,8 +55,9 @@ def build_manifest(root: Path, config: Dict[str, Any], backend_name: str, result
         "example_ids": example_ids,
         "requests_hash": requests_hash,
         "predictions_hash": prediction_hash,
+        "review_run_hash": review_run_hash,
         "gates": {k: config[k] for k in ("network", "allow_model_download", "allow_training", "allow_paid_api")},
-        "model": None, "tokenizer": None,
+        "model": model_name or None, "tokenizer": None,
         "token_usage": None, "cost": None,
         "quality_claim": ("NONE: fixture/offline run; structural metrics only, not a quality result"
                           if result_kind in ("fixture", "baseline") else "see metrics.review (unknown if unreviewed)"),

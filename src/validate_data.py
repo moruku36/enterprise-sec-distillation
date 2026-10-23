@@ -158,10 +158,14 @@ def validate_all(config: Dict[str, Any], root: Path = ROOT) -> Tuple[List[str], 
             errors.append(str(e))
     if data.get("reviews"):
         try:
+            reviewed_ids = set()
             for row in load_jsonl(resolve(root, data["reviews"])):
                 errors += validate_review(row)
                 if row.get("example_id") not in ids:
                     errors.append(f"review for unknown example {row.get('example_id')!r}")
+                if row.get("example_id") in reviewed_ids:
+                    errors.append(f"duplicate review for example {row.get('example_id')!r}")
+                reviewed_ids.add(row.get("example_id"))
         except ContractError as e:
             errors.append(str(e))
     return errors, warnings

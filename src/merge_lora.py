@@ -7,6 +7,9 @@ Hugging Face 形式のマージ済みモデルを出力するスクリプト。
 
 import os
 import argparse
+from pathlib import Path
+from contracts import ContractError
+from stage_gate import approved, new_output, pilot_config
 
 
 def main():
@@ -14,7 +17,29 @@ def main():
     parser.add_argument("--base_model", default="Qwen/Qwen2.5-3B-Instruct", help="Base HuggingFace model ID")
     parser.add_argument("--adapter_dir", default="models/lora_adapter", help="Directory containing LoRA weights")
     parser.add_argument("--output_dir", default="models/merged_model", help="Directory to save merged model")
+    parser.add_argument("--config", default="configs/pilot.example.json")
+    parser.add_argument("--validate-only", action="store_true")
+    parser.add_argument("--execute", action="store_true")
+    parser.add_argument("--approve-merge", action="store_true")
     args = parser.parse_args()
+
+    if not args.execute and not args.validate_only:
+        print("Merge blocked by default. Use --validate-only for offline preflight.")
+        return 1
+    try:
+        config = pilot_config(args.config)
+        if args.base_model != config["model"]["name"]:
+            raise ContractError("base model differs from approved pilot config")
+        new_output(args.output_dir)
+        if not Path(args.adapter_dir).is_dir():
+            raise ContractError("adapter directory is missing")
+        if not args.execute:
+            print("Offline merge validation passed; no model loaded.")
+            return 0
+        approved(config, "merge", args.approve_merge)
+    except ContractError as exc:
+        print(f"ERROR: {exc}")
+        return 1
 
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -25,12 +50,14 @@ def main():
     print(f"Adapter Dir: {args.adapter_dir}")
     print(f"Output Dir: {args.output_dir}")
 
-    tokenizer = AutoTokenizer.from_pretrained(args.base_model, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(args.base_model, revision=config["model"]["tokenizer_revision"],
+                                              local_files_only=True, trust_remote_code=False)
     base_model = AutoModelForCausalLM.from_pretrained(
         args.base_model,
+        revision=config["model"]["revision"], local_files_only=True,
         torch_dtype=torch.float16,
         device_map="cpu",  # CPUマージでVRAMを消費しない
-        trust_remote_code=True,
+        trust_remote_code=False,
     )
 
     print("Loading and attaching LoRA weights...")
@@ -53,4 +80,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

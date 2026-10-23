@@ -53,6 +53,9 @@ def parse_prediction(example_id: str, raw: RawResult) -> Dict[str, Any]:
     errs = validate_prediction(rec) if all(k in rec for k in ("decision", "answer")) else ["missing keys"]
     if errs or rec["decision"] not in DECISIONS:
         return fail("schema_invalid")
+    # Positional IDs are scoped to this immutable prediction hash, not to an example alone.
+    for i, claim in enumerate(rec["claims"], 1):
+        claim.setdefault("claim_id", f"c{i}")
     return rec
 
 
