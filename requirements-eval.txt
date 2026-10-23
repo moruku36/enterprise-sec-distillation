@@ -1,0 +1,2 @@
+# CPU-only offline evaluation harness. Standard library only; no torch / transformers / API clients.
+# (Training stack stays in requirements.txt.)

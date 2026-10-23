@@ -1,0 +1,27 @@
+{
+  "schema_version": "1",
+  "note": "EXAMPLE ONLY. Unset (null) budgets block any run. Training/API/GPU need separate approval.",
+  "model": {
+    "name": null,
+    "revision": null,
+    "tokenizer_revision": null,
+    "license_checked": false
+  },
+  "budget": {
+    "currency": null,
+    "max_input_tokens": null,
+    "max_output_tokens": null,
+    "max_requests": null,
+    "max_training_gpu_hours": null,
+    "max_models": null,
+    "max_storage_gb": null
+  },
+  "gates": {
+    "min_answerable_coverage": 0.8,
+    "min_selective_correctness": 0.95,
+    "min_citation_completeness": 0.95,
+    "max_false_answer_on_unanswerable": 0.05,
+    "max_severe_unsafe": 0,
+    "note": "preregistered tentative targets"
+  }
+}

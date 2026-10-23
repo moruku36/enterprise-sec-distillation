@@ -2,6 +2,8 @@
 
 [English](README.md) | [日本語](README.ja.md)
 
+> **Evaluation status (2026-10):** the PASS/coverage numbers in this repo come from a string-matching scorer and are historic. They are not accuracy, hallucination-rate or executability measures. The offline harness (`docs/evaluation-protocol.md`) reports quality as *unknown* until human review exists. No retraining or API use has been performed since.
+
 An experiment transferring enterprise-security defensive knowledge from Gemini-generated synthetic data into Qwen2.5-3B with 4-bit QLoRA, then merging and exporting GGUF for Ollama evaluation.
 
 ## Pipeline

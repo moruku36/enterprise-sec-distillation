@@ -1,0 +1,35 @@
+{
+  "schema_version": "1",
+  "mode": "offline",
+  "network": false,
+  "allow_model_download": false,
+  "allow_training": false,
+  "allow_paid_api": false,
+  "allow_locked_test": false,
+  "data": {
+    "sources": "data/v2/fixtures/sources.jsonl",
+    "examples": "data/v2/fixtures/examples.jsonl",
+    "cached_responses": "data/v2/fixtures/cached_responses.jsonl",
+    "reviews": "data/v2/fixtures/reviews.jsonl"
+  },
+  "legacy_hashes": "configs/legacy_hashes.json",
+  "splits_to_evaluate": [
+    "dev"
+  ],
+  "allowed_source_review_status": [
+    "fixture_unreviewed",
+    "human_verified"
+  ],
+  "retrieval": {
+    "mode": "retrieved",
+    "top_k": 3
+  },
+  "generation": {
+    "seed": 0,
+    "temperature": 0,
+    "num_ctx": 4096,
+    "num_predict": 768,
+    "stop": []
+  },
+  "system_prompt": "あなたは版を固定した公式資料に基づく防御セキュリティ支援アシスタントです。与えられた根拠スパンのみを使い、JSON(decision, answer, claims, commands, missing_information, as_of)で答えてください。根拠が不足・矛盾する場合は commands を捏造せず保留してください。コマンドは提案のみで実行しません。"
+}

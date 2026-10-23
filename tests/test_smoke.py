@@ -12,19 +12,15 @@ from pathlib import Path
 
 class TestSmoke(unittest.TestCase):
     def test_evaluate_cli_dry_run(self):
-        temp_out = Path("tests/temp_eval_results.json")
-        try:
-            res = subprocess.run(
-                [sys.executable, "src/evaluate.py", "--dry_run", "--output", str(temp_out)],
-                capture_output=True,
-                text=True,
-            )
-            self.assertEqual(res.returncode, 0, f"evaluate.py dry_run failed:\n{res.stderr}")
-            self.assertIn("Evaluation Summary", res.stdout)
-            self.assertTrue(temp_out.exists(), "Dry-run should create output file")
-        finally:
-            if temp_out.exists():
-                temp_out.unlink()
+        before = Path("data/eval_results.json").read_bytes()
+        res = subprocess.run(
+            [sys.executable, "src/evaluate.py", "--dry_run"],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res.returncode, 0, f"evaluate.py dry_run failed:\n{res.stdout}\n{res.stderr}")
+        self.assertIn("Evaluation Summary", res.stdout)
+        self.assertEqual(before, Path("data/eval_results.json").read_bytes(), "dry-run must not touch legacy results")
 
     def test_merge_lora_help(self):
         res = subprocess.run(

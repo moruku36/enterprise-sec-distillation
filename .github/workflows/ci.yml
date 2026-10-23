@@ -29,3 +29,18 @@ jobs:
     - name: Run Schema and Smoke Tests
       run: |
         python -m unittest discover -s tests -v
+
+  offline-eval:
+    # CPU / offline gate: no training stack, no GPU, no API keys, no model downloads.
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+    - name: Validate evaluation data contracts and legacy artifact hashes
+      run: python src/validate_data.py --config configs/eval_offline.json
+    - name: Offline harness dry-run
+      run: python src/evaluate.py --config configs/eval_offline.json --dry_run
+    - name: Offline harness regression tests
+      run: python -m unittest tests.test_offline_harness -v

@@ -1,254 +1,183 @@
 """
 evaluate.py
-蒸留モデルとベースモデルの比較評価ベンチマークスクリプト。
-data/eval.jsonl から未学習インシデントシナリオを読み込み、
-「具体性」「実務適合性」「正確性 / ハルシネーション検証」の多軸で評価・比較する。
+オフライン評価ハーネス (外部通信なし・CPUのみ)。
+
+  python src/evaluate.py --config configs/eval_offline.json --dry_run
+  python src/evaluate.py --config configs/eval_offline.json --backend cached --output runs/offline-review/
+
+* 入力が欠けていたり契約違反なら fail-closed (終了コード1)。縮小フォールバックはしない。
+* 既存の出力先 (data/eval_results.json 等) は上書きしない。--output は存在しない/空のディレクトリのみ。
+* 品質指標は人手レビューが無ければ unknown。fixture 実行から品質は主張しない。
+* ollama バックエンドは config.network=true かつ --allow-network の両方が必要 (この基盤では未使用)。
 """
 
-import os
-import json
 import argparse
-import urllib.request
+import json
+import sys
 from pathlib import Path
-from typing import List, Dict, Any
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass
+from typing import Any, Dict, List
 
-DEFAULT_EVAL_FILE = "data/eval.jsonl"
+from backends import (AbstainBackend, CachedResponsesBackend, OllamaBackend, RetrievalOnlyBackend,
+                      parse_prediction)
+from contracts import ContractError, load_jsonl, sha256_text
+from metrics import compute_metrics, legacy_flags
+from retrieval import build_corpus, get_context
+from run_manifest import build_manifest, canonical_hash
+from validate_data import ROOT, load_config, resolve, validate_all
 
-
-def load_eval_scenarios(path: str) -> List[Dict[str, Any]]:
-    scenarios = []
-    eval_path = Path(path)
-    if eval_path.exists():
-        with open(eval_path, "r", encoding="utf-8") as f:
-            for line in f:
-                if line.strip():
-                    scenarios.append(json.loads(line))
-        print(f"Loaded {len(scenarios)} evaluation scenarios from {path}")
-    else:
-        print(f"Warning: {path} not found. Using fallback scenarios.")
-        scenarios = [
-            {
-                "id": "eval_01",
-                "category": "incident_response",
-                "instruction": "社内LAN内の複数端末でBitLockerの不正暗号化を装うランサムウェアの挙動を検知しました。最初の30分で実施すべきトリアージ手順と緊急遮断判断基準を提示してください。",
-                "ground_truth_criteria": {
-                    "required_concepts": ["EDRによる隔離", "ドメインコントローラー保護", "manage-bdeによる状態確認"],
-                    "fact_check_notes": "正規コマンドは manage-bde。diskpart等によるキー破棄検証はハルシネーション。",
-                },
-            },
-            {
-                "id": "eval_02",
-                "category": "cloud_security",
-                "instruction": "AWS環境でGuardDuty「UnauthorizedAccess:IAMUser/InstanceCredentialExfiltration.OutsideAWS」アラート対応、認証情報無効化、IMDSv2強制適用のCLIを提示してください。",
-                "ground_truth_criteria": {
-                    "required_concepts": ["EC2通信遮断", "IAMセッション失効", "modify-instance-metadata-options"],
-                    "fact_check_notes": "IMDSv2必須化は aws ec2 modify-instance-metadata-options。aws iam revoke-instance-profile-credentials-permission は存在しないAPI。",
-                },
-            },
-        ]
-    return scenarios
-
-
-def query_ollama(model: str, prompt: str, timeout: int = 120) -> str:
-    url = "http://127.0.0.1:11434/api/generate"
-    data = json.dumps({
-        "model": model,
-        "prompt": prompt,
-        "stream": False,
-        "options": {
-            "temperature": 0.7,
-            "top_p": 0.8,
-        }
-    }).encode("utf-8")
-
-    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as response:
-            res = json.loads(response.read().decode("utf-8"))
-            return res.get("response", "")
-    except Exception as e:
-        return f"Error querying Ollama ({model}): {e}"
-
-
+# 旧評価器の known-bad 文字列 (補助フラグ専用。unsafe 判定には使わない)
 GLOBAL_KNOWN_BAD_PATTERNS = [
-    "revoke-instance-profile-credentials-permission",
-    "diskpart /s bitlocker",
-    "0x8037",
-    "aws_securityhub_findings",
-    "revoking-instance-profile",
-    "state = \"disabled\"",
-    "http-mode none",
-    "rm-mountpoint",
-    "delete-bucket",
-    "--no-mfa-enabled",
+    "revoke-instance-profile-credentials-permission", "diskpart /s bitlocker", "0x8037",
+    "aws_securityhub_findings", "revoking-instance-profile", "state = \"disabled\"",
+    "http-mode none", "rm-mountpoint", "delete-bucket", "--no-mfa-enabled",
 ]
 
 
 def evaluate_response_quality(response_text: str, criteria: Dict[str, Any]) -> Dict[str, Any]:
+    """legacy 文字列ヒューリスティック (data/eval.jsonl 用)。正しさの判定ではない。
+
+    verified_correct は常に None。キーワードの位置・文脈・引数の整合は見ていない。
     """
-    回答テキストに対して、厳格な required_checks (all_of / any_of) の充足度、
-    コマンド構文の存在、および known-bad / forbidden パターンの検出を行いスコアリングする。
-    """
-    resp_lower = response_text.lower()
-
-    # 1. 概念・要件チェック (required_checks)
-    required_checks = criteria.get("required_checks", [])
-    passed_checks = []
-    failed_checks = []
-
-    if required_checks:
-        for check in required_checks:
-            name = check.get("name", "unnamed_check")
-            all_of = check.get("all_of", [])
-            any_of = check.get("any_of", [])
-
-            # all_of: すべての単語が含まれている必要がある
-            all_ok = all(kw.lower() in resp_lower for kw in all_of) if all_of else True
-            # any_of: いずれか1つが含まれていればOK
-            any_ok = any(kw.lower() in resp_lower for kw in any_of) if any_of else True
-
-            if all_ok and any_ok:
-                passed_checks.append(name)
-            else:
-                failed_checks.append(name)
-        total_checks = len(required_checks)
-        coverage_score = round(len(passed_checks) / total_checks, 2) if total_checks else 1.0
-    else:
-        # 古いスキーマ (required_concepts) のフォールバック
-        legacy_req = criteria.get("required_concepts", [])
-        hit = [c for c in legacy_req if any(kw.lower() in resp_lower for kw in c.split("/"))]
-        coverage_score = round(len(hit) / len(legacy_req), 2) if legacy_req else 1.0
-        passed_checks = hit
-        failed_checks = [c for c in legacy_req if c not in hit]
-        total_checks = len(legacy_req)
-
-    # 2. 禁止パターン・Known-bad パターン検出
-    scenario_forbidden = criteria.get("forbidden_patterns", [])
-    all_bad_candidates = list(set(GLOBAL_KNOWN_BAD_PATTERNS + scenario_forbidden))
-    detected_bad = [bad for bad in all_bad_candidates if bad.lower() in resp_lower]
-
-    # 3. 実コマンド構文の存在
-    has_code_or_commands = any(marker in response_text for marker in [
-        "```", "aws ", "az ", "Get-", "gpupdate", "manage-bde", "netstat", "ss ", "tcpdump", "sudo ", "Connect-MgGraph", "modify-instance-metadata-options"
-    ])
-
-    # 4. 自動判定スコアリング (1〜5点)
-    if detected_bad:
-        auto_accuracy = 2  # 誤コマンド・非実在APIが含まれる場合は上限2点
-        auto_status = "KNOWN_BAD_DETECTED"
-    elif coverage_score >= 0.75:
-        auto_accuracy = 5 if has_code_or_commands else 4
-        auto_status = "PASS_STRICT" if has_code_or_commands else "PASS_GENERIC"
-    elif coverage_score >= 0.5:
-        auto_accuracy = 3
-        auto_status = "PASS_PARTIAL"
-    else:
-        auto_accuracy = 2
-        auto_status = "INSUFFICIENT"
-
-    auto_operational = 4 if (has_code_or_commands and not detected_bad and coverage_score >= 0.5) else (
-        2 if detected_bad else (3 if coverage_score >= 0.5 else 2)
-    )
-
+    low = response_text.lower()
+    checks = criteria.get("required_checks", [])
+    passed = [c.get("name", "unnamed") for c in checks
+              if all(k.lower() in low for k in c.get("all_of", []))
+              and (not c.get("any_of") or any(k.lower() in low for k in c["any_of"]))]
+    coverage = round(len(passed) / len(checks), 2) if checks else None
+    bad = legacy_flags(response_text, list(set(GLOBAL_KNOWN_BAD_PATTERNS + criteria.get("forbidden_patterns", []))))
     return {
-        "coverage_score": coverage_score,
-        "command_presence": has_code_or_commands,
-        "known_bad_pattern_count": len(detected_bad),
-        "detected_bad_patterns": detected_bad,
-        "passed_checks": passed_checks,
-        "failed_checks": failed_checks,
-        "total_checks": total_checks,
-        "auto_accuracy_score": auto_accuracy,
-        "auto_operational_score": auto_operational,
-        "auto_validation_status": auto_status,
-        "manual_review": None,
-        "fact_check_notes": criteria.get("fact_check_notes", ""),
+        "legacy_keyword_coverage": coverage,
+        "legacy_blacklist_flags": bad,
+        "verified_correct": None,
+        "note": "string-heuristic only; not hallucination rate, executability or operational correctness",
     }
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Evaluate distilled model vs base model with fact-checking")
-    parser.add_argument("--model", default="sec-defense", help="Distilled Ollama model name (e.g., sec-defense)")
-    parser.add_argument("--base_model", default="qwen2.5:3b", help="Base Ollama model name for comparison (default: qwen2.5:3b)")
-    parser.add_argument("--eval_file", default=DEFAULT_EVAL_FILE, help="Path to evaluation questions (JSONL)")
-    parser.add_argument("--output", default="data/eval_results.json", help="Evaluation output path")
-    parser.add_argument("--dry_run", action="store_true", help="Run without Ollama invocation (validates prompt loading and schema)")
-    args = parser.parse_args()
+def _backend(name: str, config: Dict[str, Any], root: Path, allow_network: bool, model: str):
+    if name == "abstain":
+        return AbstainBackend(), "baseline"
+    if name == "retrieval_only":
+        return RetrievalOnlyBackend(), "baseline"
+    if name == "cached":
+        path = config["data"].get("cached_responses")
+        if not path:
+            raise ContractError("backend 'cached' requires data.cached_responses in config")
+        return CachedResponsesBackend(resolve(root, path)), "cached"
+    if name == "ollama":
+        if config["network"] is not True or not allow_network:
+            raise ContractError("ollama backend needs config.network=true AND --allow-network "
+                                "(offline harness refuses by default)")
+        return OllamaBackend(model, config["generation"]), "recorded"
+    raise ContractError(f"unknown backend {name!r}")
 
-    scenarios = load_eval_scenarios(args.eval_file)
 
-    print("==================================================")
-    print(" Enterprise Security Model Evaluation Benchmark   ")
-    print("==================================================")
-    print(f"Target Distilled Model: {args.model}")
-    print(f"Baseline Comparison:    {args.base_model}")
-    print(f"Scenarios to evaluate:  {len(scenarios)}")
-    print(f"Output Destination:     {args.output}\n")
+def _check_output_dir(out: Path, root: Path):
+    out = out.resolve()
+    if out.is_file():
+        raise ContractError(f"output path is an existing file, refusing to overwrite: {out}")
+    if out.exists() and any(out.iterdir()):
+        raise ContractError(f"output directory is not empty, refusing to overwrite: {out}")
+    data_dir = (root / "data").resolve()
+    if data_dir == out or data_dir in out.parents:
+        raise ContractError("refusing to write under data/ (legacy artifacts are immutable)")
 
-    results = []
-    category_stats: Dict[str, Dict[str, int]] = {}
 
-    for i, item in enumerate(scenarios, 1):
-        s_id = item.get("id", f"eval_{i:02d}")
-        cat = item.get("category", "general")
-        prompt = item.get("instruction", "")
-        if item.get("input"):
-            prompt += f"\n\n【前提・ログ】\n{item['input']}"
+def run(args) -> int:
+    root = Path(args.root)
+    config = load_config(resolve(root, args.config))
+    errors, warnings = validate_all(config, root)
+    for w in warnings:
+        print(f"WARN: {w}")
+    if errors:
+        for e in errors:
+            print(f"ERROR: {e}")
+        print("evaluate: data/config validation failed (fail-closed); nothing was run")
+        return 1
 
-        criteria = item.get("ground_truth_criteria", {})
+    sources = load_jsonl(resolve(root, config["data"]["sources"]))
+    examples = [e for e in load_jsonl(resolve(root, config["data"]["examples"]))
+                if e["split"] in config["splits_to_evaluate"]]
+    if not examples:
+        print("ERROR: no examples in the selected splits; refusing to run")
+        return 1
+    corpus = build_corpus(sources, config["allowed_source_review_status"])
+    corpus_keys = {(d["source_id"], d["span_id"]) for d in corpus}
+    reviews = {}
+    if config["data"].get("reviews"):
+        reviews = {r["example_id"]: r for r in load_jsonl(resolve(root, config["data"]["reviews"]))}
 
-        print(f"[{i}/{len(scenarios)}] Testing {s_id} ({cat})...")
+    backend, kind = _backend(args.backend, config, root, args.allow_network, args.model)
+    rmode, top_k = config["retrieval"]["mode"], config["retrieval"]["top_k"]
+    fixture = any(e["provenance"] == "fixture" for e in examples)
+    result_kind = "fixture" if fixture and kind != "baseline" else kind
 
-        if args.dry_run:
-            distilled_res = f"[DRY_RUN] Simulated distilled output for {s_id}"
-            base_res = f"[DRY_RUN] Simulated base output for {s_id}"
-        else:
-            print(f"  - Querying distilled ({args.model})...")
-            distilled_res = query_ollama(args.model, prompt)
-            print(f"  - Querying baseline ({args.base_model})...")
-            base_res = query_ollama(args.base_model, prompt)
+    print("=" * 50)
+    print(" Offline Evaluation Harness")
+    print("=" * 50)
+    print(f"backend={args.backend} retrieval={rmode}(k={top_k}) splits={config['splits_to_evaluate']} "
+          f"examples={len(examples)} result_kind={result_kind}")
+    if args.dry_run:
+        print("DRY RUN: contracts validated; no backend called, no files written, no metrics computed.")
+        print("\nEvaluation Summary (dry run): OK")
+        return 0
+    if not args.output:
+        print("ERROR: --output DIR is required for a real (offline) run")
+        return 1
+    out = Path(args.output)
+    _check_output_dir(out, root)
 
-        distilled_eval = evaluate_response_quality(distilled_res, criteria)
-        base_eval = evaluate_response_quality(base_res, criteria)
+    predictions, requests = [], []
+    for ex in examples:
+        ctx = get_context(ex, corpus, rmode, top_k)
+        req = {"example": ex, "context": ctx, "system_prompt": config["system_prompt"],
+               "generation": config["generation"],
+               "prompt": ex["question"] + "".join(f"\n[{c['source_id']}#{c['span_id']}] {c['text']}" for c in ctx)}
+        requests.append({"example_id": ex["example_id"], "prompt_hash": sha256_text(req["prompt"])})
+        predictions.append(parse_prediction(ex["example_id"], backend.generate(req)))
 
-        results.append({
-            "test_id": s_id,
-            "category": cat,
-            "instruction": item.get("instruction", ""),
-            "input": item.get("input", ""),
-            "references": item.get("references", []),
-            "distilled_model": args.model,
-            "distilled_response": distilled_res,
-            "distilled_evaluation": distilled_eval,
-            "base_model": args.base_model,
-            "base_response": base_res,
-            "base_evaluation": base_eval,
-        })
+    metrics = compute_metrics(examples, {p["example_id"]: p for p in predictions}, corpus_keys, reviews,
+                              seed=config["generation"]["seed"])
+    data_files = {k: resolve(root, v) for k, v in config["data"].items() if v}
+    manifest = build_manifest(root, config, args.backend, result_kind, data_files,
+                              [e["example_id"] for e in examples], canonical_hash(predictions),
+                              canonical_hash(requests))
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "predictions.jsonl").write_text(
+        "".join(json.dumps(p, ensure_ascii=False, sort_keys=True) + "\n" for p in predictions), encoding="utf-8")
+    (out / "metrics.json").write_text(json.dumps(metrics, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    (out / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
 
-        if cat not in category_stats:
-            category_stats[cat] = {"count": 0}
-        category_stats[cat]["count"] += 1
-
-    # Save output
-    output_path = Path(args.output)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(results, f, ensure_ascii=False, indent=2)
-
-    print("\n==================================================")
+    print("\n" + "=" * 50)
     print(" Evaluation Summary")
-    print("==================================================")
-    print(f"Total Test Cases: {len(results)}")
-    print("Categories evaluated:")
-    for cat, stat in category_stats.items():
-        print(f"  - {cat}: {stat['count']} scenarios")
-    print(f"\nDetailed benchmark results saved to: {args.output}")
+    print("=" * 50)
+    if result_kind in ("fixture", "baseline"):
+        print(f"NOTE: result_kind={result_kind}. Structural metrics only; NOT a quality or accuracy result.")
+    print(f"run_failures: {metrics['run_failures']}/{metrics['n_examples']}")
+    print(f"answerable_coverage (all requests): {metrics['answerable_coverage']['all_requests']}")
+    print(f"false_answer_on_unanswerable (all requests): {metrics['false_answer_on_unanswerable']['all_requests']}")
+    print(f"human-reviewed quality: {'unknown (no reviews)' if not metrics['review']['n_reviewed'] else metrics['review']}")
+    print(f"saved to: {out}")
+    return 0
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description="Offline evaluation harness (no network, no GPU, no training)")
+    ap.add_argument("--config", default="configs/eval_offline.json")
+    ap.add_argument("--root", default=str(ROOT))
+    ap.add_argument("--backend", default="cached",
+                    choices=["abstain", "retrieval_only", "cached", "ollama"])
+    ap.add_argument("--model", default="", help="Ollama model name (ollama backend only)")
+    ap.add_argument("--allow-network", action="store_true", help="required in addition to config.network=true")
+    ap.add_argument("--output", default=None, help="new or empty output directory")
+    ap.add_argument("--dry_run", "--dry-run", dest="dry_run", action="store_true",
+                    help="validate only; writes nothing")
+    args = ap.parse_args(argv)
+    try:
+        return run(args)
+    except ContractError as e:
+        print(f"ERROR: {e}")
+        return 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
