@@ -11,20 +11,8 @@ import json
 import argparse
 from pathlib import Path
 from typing import List, Any
-from pydantic import BaseModel, Field
-
-try:
-    from google import genai
-    from google.genai import types
-except ImportError:
-    genai = None
-    types = None
-
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass
+from contracts import ContractError
+from stage_gate import approved, new_output, pilot_config
 
 # サブカテゴリ定義
 CATEGORIES = {
@@ -50,17 +38,18 @@ CATEGORIES = {
     },
 }
 
-class QAPair(BaseModel):
-    instruction: str = Field(description="実務に即した具体的な質問やインシデントシナリオ")
-    input: str = Field(default="", description="追加の前提条件やログスニペット（なければ空文字）")
-    output: str = Field(description="セキュリティエンジニア視点の具体的・体系的で実践的な解決策・手順")
-
-
-import time
-
 from datetime import datetime, timezone
 
-def generate_questions_for_category(client: Any, model: str, cat_key: str, count: int) -> tuple[List[dict], str]:
+def generate_questions_for_category(client: Any, model: str, cat_key: str, count: int,
+                                    input_budget: int, output_budget: int) -> tuple[List[dict], str]:
+    from pydantic import BaseModel, Field
+    from google.genai import types
+
+    class QAPair(BaseModel):
+        instruction: str = Field(description="Security question")
+        input: str = Field(default="", description="Additional context")
+        output: str = Field(description="Proposed answer pending human review")
+
     cat = CATEGORIES[cat_key]
     prompt = f"""あなたはエンタープライズサイバーセキュリティの最高責任者・エキスパートです。
 以下のカテゴリに関する、実務的で深みのある問答ペア（Instruction / Output）を {count} 件作成してください。
@@ -74,79 +63,88 @@ def generate_questions_for_category(client: Any, model: str, cat_key: str, count
 3. 出力形式は必ず指定されたスキーマに従うこと。
 """
 
-    models_to_try = [model]
-    # 3.8が混雑(503)している場合のフォールバック候補
-    for fallback in ["gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash"]:
-        if fallback not in models_to_try:
-            models_to_try.append(fallback)
-
-    for m in models_to_try:
-        for attempt in range(3):
-            try:
-                response = client.models.generate_content(
-                    model=m,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                        response_schema=list[QAPair],
-                        temperature=0.7,
-                    ),
-                )
-                data = json.loads(response.text)
-                return data, m
-            except Exception as e:
-                err_str = str(e)
-                if "503" in err_str or "429" in err_str:
-                    wait_time = (attempt + 1) * 3
-                    print(f"    [{m}] 混雑検知 (Attempt {attempt+1}/3): {wait_time}秒待機してリトライ...")
-                    time.sleep(wait_time)
-                else:
-                    print(f"    [{m}] エラー: {e}")
-                    break
-        print(f"    [{m}] 失敗したため次のモデル候補に切り替えます。")
-
-    raise RuntimeError(f"All models failed for category {cat_key}")
+    # UTF-8 bytes conservatively bound token count for the approved prompt.
+    if len(prompt.encode("utf-8")) > input_budget:
+        raise ContractError("prompt exceeds input-token budget")
+    response = client.models.generate_content(
+        model=model, contents=prompt,
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json", response_schema=list[QAPair], temperature=0.7,
+            max_output_tokens=output_budget,
+        ),
+    )
+    return json.loads(response.text), model
 
 
 def main():
     parser = argparse.ArgumentParser(description="Generate enterprise security dataset via Gemini")
     parser.add_argument("--model", default=os.getenv("GEMINI_MODEL", "gemini-3.8-flash"), help="Teacher model name")
     parser.add_argument("--count_per_cat", type=int, default=5, help="Number of samples per category")
-    parser.add_argument("--output", default="data/train.jsonl", help="Output JSONL path")
-    parser.add_argument("--raw_dir", default="data/raw", help="Directory to save raw generation dumps")
+    parser.add_argument("--output", required=True, help="Output JSONL path")
+    parser.add_argument("--raw_dir", required=True, help="Directory to save raw generation dumps")
     parser.add_argument("--categories", nargs="*", default=list(CATEGORIES.keys()), help="Target categories to generate")
-    parser.add_argument("--append", action="store_true", help="Append to output file instead of overwrite")
+    parser.add_argument("--config", default="configs/pilot.example.json")
+    parser.add_argument("--execute", action="store_true")
+    parser.add_argument("--allow-network", action="store_true")
+    parser.add_argument("--allow-paid-api", action="store_true")
+    parser.add_argument("--approve-generation", action="store_true")
     args = parser.parse_args()
+    if args.count_per_cat < 1 or not args.categories or any(c not in CATEGORIES for c in args.categories):
+        parser.error("categories must be known and count_per_cat must be positive")
+    try:
+        output_path, raw_dir = new_output(args.output), new_output(args.raw_dir)
+        if output_path == raw_dir or raw_dir in output_path.parents or output_path in raw_dir.parents:
+            raise ContractError("output and raw directory must be separate")
+    except ContractError as exc:
+        parser.error(str(exc))
+    if not args.execute:
+        print("DRY RUN: no network, API call, or file write; execution requires a populated pilot config and explicit gates")
+        return 0
+    try:
+        config = pilot_config(args.config)
+        approved(config, "paid_generation", args.approve_generation)
+        if not args.allow_network or not args.allow_paid_api:
+            raise ContractError("generation requires --allow-network and --allow-paid-api")
+        if not isinstance(config.get("teacher", {}).get("name"), str) or args.model != config["teacher"]["name"]:
+            raise ContractError("teacher model differs from approved config")
+        if args.count_per_cat * len(args.categories) > config["budget"]["max_requests"]:
+            raise ContractError("requested samples exceed max_requests budget")
+        per_output_budget = int(config["budget"]["max_output_tokens"] // len(args.categories))
+        if per_output_budget < 1:
+            raise ContractError("output-token budget too small")
+    except ContractError as exc:
+        parser.error(str(exc))
 
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         print("Error: GEMINI_API_KEY environment variable is not set.")
-        return
+        return 1
 
-    if genai is None:
-        print("Error: google-genai package is not installed. Please run pip install google-genai")
-        return
+    try:
+        from google import genai
+        from google.genai import types
+    except ImportError:
+        print("Error: google-genai package is not installed")
+        return 1
 
     client = genai.Client(api_key=api_key)
-    output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    raw_dir = Path(args.raw_dir)
     raw_dir.mkdir(parents=True, exist_ok=True)
 
     all_samples = []
     print(f"Starting dataset generation using model: {args.model}")
 
     for cat_key in args.categories:
-        if cat_key not in CATEGORIES:
-            continue
         print(f"Generating {args.count_per_cat} samples for category: {cat_key}...")
         try:
-            samples, actual_teacher = generate_questions_for_category(client, args.model, cat_key, args.count_per_cat)
+            samples, actual_teacher = generate_questions_for_category(
+                client, args.model, cat_key, args.count_per_cat,
+                int(config["budget"]["max_input_tokens"] // len(args.categories)), per_output_budget)
             now_iso = datetime.now(timezone.utc).isoformat()
 
             # Raw dump for auditing & provenance
             raw_dump_file = raw_dir / f"{cat_key}_{int(datetime.now().timestamp())}.json"
-            with open(raw_dump_file, "w", encoding="utf-8") as rf:
+            with open(raw_dump_file, "x", encoding="utf-8") as rf:
                 json.dump({"category": cat_key, "teacher_model": actual_teacher, "timestamp": now_iso, "data": samples}, rf, ensure_ascii=False, indent=2)
 
             for item in samples:
@@ -154,14 +152,14 @@ def main():
                 item["teacher_model"] = actual_teacher
                 item["generated_at"] = now_iso
                 item["prompt_version"] = "v1.0"
-                item["validation_status"] = "passed"
+                item["validation_status"] = "pending"
                 all_samples.append(item)
             print(f"  Successfully generated {len(samples)} samples with {actual_teacher}.")
         except Exception as e:
             print(f"  Failed for {cat_key}: {e}")
+            return 1
 
-    mode = "a" if args.append else "w"
-    with open(output_path, mode, encoding="utf-8") as f:
+    with open(output_path, "x", encoding="utf-8") as f:
         for item in all_samples:
             f.write(json.dumps(item, ensure_ascii=False) + "\n")
 
@@ -169,4 +167,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

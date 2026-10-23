@@ -22,7 +22,7 @@ from backends import (AbstainBackend, CachedResponsesBackend, OllamaBackend, Ret
 from contracts import ContractError, load_jsonl, sha256_text
 from metrics import compute_metrics, legacy_flags
 from retrieval import build_corpus, get_context
-from run_manifest import build_manifest, canonical_hash
+from run_manifest import build_manifest, canonical_hash, file_hash
 from validate_data import ROOT, load_config, resolve, validate_all
 
 # 旧評価器の known-bad 文字列 (補助フラグ専用。unsafe 判定には使わない)
@@ -104,7 +104,10 @@ def run(args) -> int:
     corpus_keys = {(d["source_id"], d["span_id"]) for d in corpus}
     reviews = {}
     if config["data"].get("reviews"):
-        reviews = {r["example_id"]: r for r in load_jsonl(resolve(root, config["data"]["reviews"]))}
+        review_rows = load_jsonl(resolve(root, config["data"]["reviews"]))
+        if len({r["example_id"] for r in review_rows}) != len(review_rows):
+            raise ContractError("duplicate review example_id")
+        reviews = {r["example_id"]: r for r in review_rows}
 
     backend, kind = _backend(args.backend, config, root, args.allow_network, args.model)
     rmode, top_k = config["retrieval"]["mode"], config["retrieval"]["top_k"]
@@ -132,15 +135,27 @@ def run(args) -> int:
         req = {"example": ex, "context": ctx, "system_prompt": config["system_prompt"],
                "generation": config["generation"],
                "prompt": ex["question"] + "".join(f"\n[{c['source_id']}#{c['span_id']}] {c['text']}" for c in ctx)}
-        requests.append({"example_id": ex["example_id"], "prompt_hash": sha256_text(req["prompt"])})
+        requests.append({"example_id": ex["example_id"], "prompt_hash": sha256_text(req["prompt"]),
+                         "system_prompt_hash": sha256_text(req["system_prompt"]),
+                         "generation": req["generation"], "retrieval": config["retrieval"],
+                         "context_ids": [(c["source_id"], c["span_id"]) for c in ctx]})
         predictions.append(parse_prediction(ex["example_id"], backend.generate(req)))
 
+    # The review file is deliberately omitted from the run identity: reviewers can attach it
+    # after inspecting the saved predictions without changing the evaluated run.
+    run_config = {**config, "data": {**config["data"], "reviews": None}}
+    input_hashes = {k: file_hash(resolve(root, v)) for k, v in config["data"].items()
+                    if k != "reviews" and v}
+    run_hash = canonical_hash({"config": run_config, "input_hashes": input_hashes,
+                               "backend": args.backend, "model": args.model,
+                               "requests_hash": canonical_hash(requests),
+                               "predictions_hash": canonical_hash(predictions)})
     metrics = compute_metrics(examples, {p["example_id"]: p for p in predictions}, corpus_keys, reviews,
-                              seed=config["generation"]["seed"])
+                              seed=config["generation"]["seed"], run_hash=run_hash)
     data_files = {k: resolve(root, v) for k, v in config["data"].items() if v}
     manifest = build_manifest(root, config, args.backend, result_kind, data_files,
                               [e["example_id"] for e in examples], canonical_hash(predictions),
-                              canonical_hash(requests))
+                              canonical_hash(requests), run_hash, args.model)
     out.mkdir(parents=True, exist_ok=True)
     (out / "predictions.jsonl").write_text(
         "".join(json.dumps(p, ensure_ascii=False, sort_keys=True) + "\n" for p in predictions), encoding="utf-8")

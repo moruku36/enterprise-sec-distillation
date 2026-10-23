@@ -52,8 +52,8 @@ PREDICTION_FIELDS = (
     "missing_information", "as_of",
 )
 REVIEW_FIELDS = (
-    "example_id", "reviewer_id", "reviewed_at", "task_satisfied", "severe_unsafe",
-    "claims_supported", "reason",
+    "example_id", "run_hash", "prediction_hash", "claim_ids", "reviewer_id", "reviewed_at",
+    "task_satisfied", "severe_unsafe", "claims_supported", "reason",
 )
 
 
@@ -205,6 +205,10 @@ def validate_prediction(d: Dict[str, Any]) -> List[str]:
     if not isinstance(d["claims"], list) or not all(
             isinstance(c, dict) and isinstance(c.get("text"), str) for c in d["claims"]):
         errs.append(f"{label}: claims must be a list of {{text, source_id, span_id}}")
+    elif any("claim_id" in c for c in d["claims"]):
+        ids = [c.get("claim_id") for c in d["claims"]]
+        if any(not isinstance(cid, str) or not cid.strip() for cid in ids) or len(ids) != len(set(ids)):
+            errs.append(f"{label}: claim_id must be unique and non-empty for every claim")
     if not isinstance(d["commands"], list) or not all(
             isinstance(c, dict) and isinstance(c.get("command"), str) and isinstance(c.get("mutating"), bool)
             for c in d["commands"]):
@@ -219,13 +223,24 @@ def validate_review(d: Dict[str, Any]) -> List[str]:
     errs = _missing(d, REVIEW_FIELDS, label)
     if errs:
         return errs
+    for k in ("example_id", "reviewer_id", "reason"):
+        if not isinstance(d[k], str) or not d[k].strip():
+            errs.append(f"{label}: '{k}' must be a non-empty string")
+    for k in ("run_hash", "prediction_hash"):
+        if not isinstance(d[k], str) or not re.fullmatch(r"[0-9a-f]{64}", d[k]):
+            errs.append(f"{label}: '{k}' must be a SHA-256 hex digest")
     for k in ("task_satisfied", "severe_unsafe"):
-        if d[k] not in (True, False):
+        if type(d[k]) is not bool:
             errs.append(f"{label}: '{k}' must be true or false")
     if not is_iso_date(d["reviewed_at"]):
         errs.append(f"{label}: reviewed_at must be YYYY-MM-DD")
-    if not isinstance(d["claims_supported"], list) or not all(isinstance(x, bool) for x in d["claims_supported"]):
-        errs.append(f"{label}: claims_supported must be a list of booleans (one per claim)")
+    ids = d["claim_ids"]
+    valid_ids = _list_of_str(ids) and all(x.strip() for x in ids) and len(ids) == len(set(ids))
+    if not valid_ids:
+        errs.append(f"{label}: claim_ids must be unique non-empty strings")
+    support = d["claims_supported"]
+    if not isinstance(support, dict) or not valid_ids or set(support) != set(ids) or not all(type(v) is bool for v in support.values()):
+        errs.append(f"{label}: claims_supported must map exactly the claim_ids to booleans")
     return errs
 
 
@@ -269,7 +284,7 @@ def validate_pilot_config(d: Dict[str, Any]) -> List[str]:
     budget = d.get("budget")
     if not isinstance(budget, dict):
         return ["pilot: missing 'budget' object"]
-    for k in ("currency", "max_input_tokens", "max_output_tokens", "max_requests",
+    for k in ("currency", "max_cost", "max_input_tokens", "max_output_tokens", "max_requests",
               "max_training_gpu_hours", "max_models", "max_storage_gb"):
         if budget.get(k) in (None, 0, ""):
             errs.append(f"pilot: budget.{k} is unset -> blocked")

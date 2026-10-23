@@ -1,6 +1,8 @@
 {
   "schema_version": "1",
   "note": "EXAMPLE ONLY. Unset (null) budgets block any run. Training/API/GPU need separate approval.",
+  "approvals": {"paid_generation": false, "training": false, "merge": false},
+  "teacher": {"name": null},
   "model": {
     "name": null,
     "revision": null,
@@ -9,6 +11,7 @@
   },
   "budget": {
     "currency": null,
+    "max_cost": null,
     "max_input_tokens": null,
     "max_output_tokens": null,
     "max_requests": null,

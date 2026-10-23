@@ -9,6 +9,32 @@ import os
 import json
 import argparse
 from pathlib import Path
+from contracts import ContractError, load_jsonl, is_iso_date
+from stage_gate import approved, new_output, pilot_config, require_version
+
+
+def preflight(args):
+    config = pilot_config(args.config)
+    if args.base_model != config["model"]["name"]:
+        raise ContractError("base model differs from approved pilot config")
+    if args.epochs < 1 or args.batch_size < 1 or args.grad_accum < 1 or args.max_seq_length < 1 or args.lr <= 0:
+        raise ContractError("training hyperparameters must be positive")
+    new_output(args.output_dir)
+    rows = load_jsonl(Path(args.data_path))
+    if not rows:
+        raise ContractError("training data is empty")
+    for i, row in enumerate(rows, 1):
+        if not all(isinstance(row.get(k), str) and row[k].strip() for k in ("instruction", "output")):
+            raise ContractError(f"training row {i}: missing instruction/output")
+        if row.get("validation_status") != "passed" or row.get("source_verified") is not True or not (
+                isinstance(row.get("reviewer_id"), str) and row["reviewer_id"].strip()
+                and is_iso_date(row.get("reviewed_at"))):
+            raise ContractError(f"training row {i}: human source review/approval is missing")
+    for package, version in (("trl", "0.15.1"), ("transformers", "4.49.0"),
+                             ("datasets", "3.3.2"), ("peft", "0.14.0"),
+                             ("bitsandbytes", "0.45.3"), ("accelerate", "1.4.0")):
+        require_version(package, version)
+    return config
 
 
 def load_qa_dataset(jsonl_path: str, tokenizer, max_length: int = 1536):
@@ -51,7 +77,24 @@ def main():
     parser.add_argument("--grad_accum", type=int, default=4, help="Gradient accumulation steps")
     parser.add_argument("--lr", type=float, default=2e-4, help="Learning rate")
     parser.add_argument("--max_seq_length", type=int, default=1536, help="Maximum sequence length")
+    parser.add_argument("--config", default="configs/pilot.example.json")
+    parser.add_argument("--validate-only", action="store_true", help="Offline preflight; never loads a model")
+    parser.add_argument("--execute", action="store_true")
+    parser.add_argument("--approve-training", action="store_true")
     args = parser.parse_args()
+
+    if not args.execute and not args.validate_only:
+        print("Training blocked by default. Use --validate-only for offline preflight.")
+        return 1
+    try:
+        config = preflight(args)
+        if not args.execute:
+            print("Offline validation passed; no model loaded and no training started.")
+            return 0
+        approved(config, "training", args.approve_training)
+    except ContractError as exc:
+        print(f"ERROR: {exc}")
+        return 1
 
     import torch
     from transformers import (
@@ -66,7 +109,6 @@ def main():
         get_peft_model,
         prepare_model_for_kbit_training,
     )
-    from trl import SFTTrainer
 
     print(f"=== Starting QLoRA Training ===")
     print(f"Base Model: {args.base_model}")
@@ -86,16 +128,18 @@ def main():
 
     # 2. Tokenizer & Model 読み込み
     print("\nLoading tokenizer and model...")
-    tokenizer = AutoTokenizer.from_pretrained(args.base_model, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(args.base_model, revision=config["model"]["tokenizer_revision"],
+                                              local_files_only=True, trust_remote_code=False)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
     model = AutoModelForCausalLM.from_pretrained(
         args.base_model,
+        revision=config["model"]["revision"], local_files_only=True,
         quantization_config=bnb_config,
         device_map="auto",
         torch_dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16,
-        trust_remote_code=True,
+        trust_remote_code=False,
     )
 
     # 3. LoRA 設定 (SFTTrainer が内部で適用)
@@ -130,7 +174,7 @@ def main():
         warmup_steps=2,
         lr_scheduler_type="cosine",
         report_to="none",
-        max_length=args.max_seq_length,
+        max_seq_length=args.max_seq_length,
         dataset_text_field="text",
     )
 
@@ -153,4 +197,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
